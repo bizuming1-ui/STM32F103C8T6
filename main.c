@@ -338,12 +338,24 @@ static void Face_Draw(uint32_t msOfDay,uint32_t nowMs)
 #define TIMER_RUN 2u
 #define TIMER_ALARM 3u
 #define TIMER_VIEW 4u
+/* V18 top-level screens. PA5 no longer jumps straight into the countdown: it
+ * opens SCREEN_MENU first, and the menu decides where to go. */
+#define SCR_TIME 0u
+#define SCR_MENU 1u
+#define SCR_TIMER 2u
+#define SCR_STOP 3u
+#define MENU_SEL_BELL 0u
+#define MENU_SEL_STOP 1u
 static uint8_t s_view=VIEW_DIAL,s_transOn=0u,s_transFrom=VIEW_DIAL,s_transTo=VIEW_HOLE,s_pending=0u,s_bootDone=0u;
 static uint32_t s_transStart=0u;
 static uint8_t s_timerMode=TIMER_IDLE,s_pa5BlockOn=0u,s_timerReturnView=VIEW_DIAL;
 static uint8_t s_timerHour=0u,s_timerMinute=0u,s_timerSecond=0u,s_timerSelected=2u;
 static uint32_t s_pa5BlockAt=0u,s_timerStart=0u,s_timerDuration=0u;
 static uint8_t s_gramA[8][128],s_gramB[8][128];
+/* V18 screen state + anti-mistouch lock */
+static uint8_t s_screen=SCR_TIME,s_menuSel=MENU_SEL_BELL,s_stopFresh=0u;
+static uint8_t s_pa4BlockOn=0u;
+static uint32_t s_pa4BlockAt=0u;
 static uint8_t Boot_IsDone(uint32_t t) { if(t>=BOOT_DONE_MS) { s_bootDone=1u; } return s_bootDone; }
 static void View_StartTrans(uint32_t now) { s_transFrom=s_view; s_transTo=(s_view==VIEW_DIAL)?VIEW_HOLE:VIEW_DIAL; s_transOn=1u; s_transStart=now; }
 static uint32_t Timer_TotalSeconds(void) { return (uint32_t)s_timerHour*3600u+(uint32_t)s_timerMinute*60u+s_timerSecond; }
@@ -394,6 +406,41 @@ static uint8_t Timer_Pa5Blocked(uint32_t now)
     if(!s_pa5BlockOn) { return 0u; }
     if((uint32_t)(now-s_pa5BlockAt)>=PA5_BLOCK_MS) { s_pa5BlockOn=0u; return 0u; } return 1u;
 }
+/* ---- V18 screen helpers -------------------------------------------------- */
+/* Leave any sub-screen and land on the clock face. The 1 second PA4 lock is
+ * armed here, so the very gesture that returned to the clock can never also
+ * switch the clock program by accident. */
+static void Screen_ToTime(uint32_t now)
+{
+    s_screen=SCR_TIME; s_pa4BlockOn=1u; s_pa4BlockAt=now;
+}
+static uint8_t Pa4_ViewBlocked(uint32_t now)
+{
+    if(!s_pa4BlockOn) { return 0u; }
+    if((uint32_t)(now-s_pa4BlockAt)>=PA4_BLOCK_MS) { s_pa4BlockOn=0u; return 0u; }
+    return 1u;
+}
+/* Enter the settings screen: always opens with 铃声 selected, and finishes any
+ * half-played clock transition so the menu is never composed mid-morph. */
+static void Menu_Enter(void)
+{
+    s_screen=SCR_MENU; s_menuSel=MENU_SEL_BELL;
+    if(s_transOn) { s_transOn=0u; s_view=s_transTo; } s_pending=0u;
+}
+/* 秒表 is a black screen for now (后续再开发): clear once, then stop updating
+ * the panel so the OLED really stays black until PA4 is held again. */
+static void Stopwatch_Enter(void)
+{
+    s_screen=SCR_STOP; s_stopFresh=1u;
+    if(s_transOn) { s_transOn=0u; s_view=s_transTo; } s_pending=0u;
+}
+/* LED mirrors the countdown: on while it runs (setup/progress and while the
+ * clock face is displayed), untouched during the alarm (that blinks it). */
+static void Led_FollowTimer(void)
+{
+    if(s_timerMode==TIMER_RUN || s_timerMode==TIMER_VIEW) { LED_On(); }
+    else if(s_timerMode!=TIMER_ALARM) { LED_Off(); }
+}
 static void Timer_RenderProgress(uint32_t now)
 {
     uint32_t elapsed=now-s_timerStart,remain,pct=0u;
@@ -418,9 +465,53 @@ static void RenderView(uint8_t view,uint32_t t,uint32_t ms,const SceneInfo *info
     if(view==VIEW_HOLE) { Scene_BlackHole(t,ms,info); } else { OLED_Clear(); Face_Draw(ms,t); }
 }
 static void CopyGram(uint8_t dst[8][128]) { uint8_t p,x; for(p=0u;p<8u;p++) { for(x=0u;x<128u;x++) { dst[p][x]=OLED_GRAM[p][x]; } } }
+/* Clock face, including the flowing dial <-> black hole morph. */
+static void RenderTimeScreen(uint32_t now,uint32_t t,uint32_t ms,const SceneInfo *info)
+{
+    if(s_transOn) {
+        uint16_t p=View_Progress(now);
+        RenderView(s_transFrom,t,ms,info); CopyGram(s_gramA); RenderView(s_transTo,t,ms,info); CopyGram(s_gramB); Scene_Compose(s_gramA,s_gramB,p);
+    } else { RenderView(s_view,t,ms,info); }
+}
+#if defined(FW_SIMULATOR)
+/* Simulator-only introspection: lets the page (and the automated regression
+ * harness) read the state machine without guessing from pixels. */
+__attribute__((export_name("sim_timer_state"))) uint32_t Sim_TimerState(void)
+{
+    return (uint32_t)s_timerHour | ((uint32_t)s_timerMinute<<8) | ((uint32_t)s_timerSecond<<16)
+         | ((uint32_t)s_timerSelected<<24);
+}
+__attribute__((export_name("sim_app_state"))) uint32_t Sim_AppState(void)
+{
+    return (uint32_t)s_screen
+         | ((uint32_t)s_timerMode<<4)
+         | ((uint32_t)s_view<<8)
+         | ((uint32_t)s_menuSel<<9)
+         | ((uint32_t)s_pa4BlockOn<<10)
+         | ((uint32_t)s_transOn<<11)
+         | ((uint32_t)s_bootDone<<12)
+         | ((uint32_t)s_timerSelected<<13)
+         | ((uint32_t)(s_pa5BlockOn?1u:0u)<<15);
+}
+#endif
+#if defined(FW_SIMULATOR)
+/* Simulator-only hooks, implemented in simulator/sim_hal.c. The browser runs
+ * one loop iteration per call and re-enters main() at the loop label, exactly
+ * like the board runs the loop in hardware. Nothing here is compiled by Keil. */
+extern uint8_t Sim_Yield(void);
+static uint32_t s_simT0=0u;
+__attribute__((export_name("fw_step"))) int main(void)
+#else
 int main(void)
+#endif
 {
     uint32_t t0;
+#if defined(FW_SIMULATOR)
+    /* Resume the control loop without re-initialising the peripherals. */
+    static uint8_t s_simInited=0u;
+    if(s_simInited) { t0=s_simT0; goto sim_loop_body; }
+    s_simInited=1u;
+#endif
     /* R5 drives the base of a high-side PNP, not the buzzer directly.
      * Preload PA8 HIGH while still input; HIGH turns Q1 off. */
     RCC->APB2ENR |= BUZZER_RCC_MASK;
@@ -434,9 +525,20 @@ int main(void)
     Date_Set(INIT_YEAR,INIT_MONTH,INIT_DAY); Clock_SetTime(INIT_HOUR,INIT_MIN,INIT_SEC);
 #endif
     t0=Millis();
+#if defined(FW_SIMULATOR)
+    s_simT0=t0;
+#endif
     for(;;) {
+#if defined(FW_SIMULATOR)
+        /* Resume point for the browser: the whole loop body - key scanning
+         * included - must run on every call, exactly like one pass of the
+         * board's main loop. */
+sim_loop_body: ;
+#endif
         uint32_t now=Millis(),t=now-t0,ms;
-        uint8_t keyMask=Key_Scan(now),repeatMask=Key_Repeat(),oledDirty=1u;
+        uint8_t keyMask=Key_Scan(now),repeatMask=Key_Repeat();
+        uint8_t longMask=Key_Long(),releaseMask=Key_Release();
+        uint8_t oledDirty=1u;
         SceneInfo info;
         DS18B20_Update(now); ms=Clock_MsOfDay();
         if(!Boot_IsDone(t) && t<WRITE_TOTAL_MS+HOLD_MS) { Write_Render(t); }
@@ -445,37 +547,69 @@ int main(void)
             Write_Render(WRITE_TOTAL_MS); OLED_FillCircle(64,32,r,OLED_BLACK); OLED_SetClipCircle(64,32,r); Face_Draw(ms,t); OLED_SetClipCircle(0,0,-1);
         } else {
             FillInfo(&info);
-            /* Input/state updates are independent of rendering. */
-            if(s_timerMode==TIMER_SET) {
-                if(keyMask & KEY_EVENT_PA4) { s_timerSelected=(uint8_t)((s_timerSelected+1u)%3u); }
-                if((keyMask|repeatMask) & KEY_EVENT_PA5) { Timer_Adjust(1); }
-                if((keyMask|repeatMask) & KEY_EVENT_PA6) { Timer_Adjust(-1); }
-                if(keyMask & KEY_EVENT_PA7) { (void)Timer_Start(now); }
-            } else if((s_timerMode==TIMER_RUN || s_timerMode==TIMER_VIEW) && (uint32_t)(now-s_timerStart)>=s_timerDuration) { Timer_Expire(now); }
-            else if(s_timerMode==TIMER_ALARM) {
-                /* Any new PA4/PA5/PA6/PA7 press dismisses the alarm at once. */
-                if(keyMask) { Timer_Dismiss(); }
+            /* --- 1) the countdown expires no matter which screen is shown ---- */
+            if((s_timerMode==TIMER_RUN || s_timerMode==TIMER_VIEW) && (uint32_t)(now-s_timerStart)>=s_timerDuration) {
+                Timer_Expire(now); s_screen=SCR_TIMER;
+            }
+            /* --- 2) input ---------------------------------------------------- */
+            if(s_timerMode==TIMER_ALARM) {
+                /* Any new key press dismisses the alarm at once (unchanged). */
+                if(keyMask) { Timer_Dismiss(); Screen_ToTime(now); }
+            } else if(s_screen==SCR_MENU) {
+                if(longMask & KEY_EVENT_PA4) { Screen_ToTime(now); }             /* 长按2秒PA4: 回时间界面 */
+                else if(releaseMask & KEY_EVENT_PA4) { s_menuSel=(uint8_t)(s_menuSel^1u); } /* 短按PA4: 选择 */
+                else if(keyMask & KEY_EVENT_PA5) {                               /* 短按PA5: 进入 */
+                    if(s_menuSel==MENU_SEL_BELL) {
+                        /* 铃声:直接进入倒计时界面(空闲=设置界面, 运行中=进度界面) */
+                        if(s_timerMode==TIMER_IDLE) { Timer_EnterSetup(); } else { s_timerMode=TIMER_VIEW; }
+                        s_screen=SCR_TIMER;
+                    } else { Stopwatch_Enter(); }                                /* 秒表:黑屏界面 */
+                }
+            } else if(s_screen==SCR_STOP) {
+                if(longMask & KEY_EVENT_PA4) { Screen_ToTime(now); }              /* 长按2秒PA4: 回时间界面 */
+            } else if(s_screen==SCR_TIMER) {
+                if(s_timerMode==TIMER_SET) {
+                    if(longMask & KEY_EVENT_PA4) { s_timerMode=TIMER_IDLE; Screen_ToTime(now); }
+                    else {
+                        if(releaseMask & KEY_EVENT_PA4) { s_timerSelected=(uint8_t)((s_timerSelected+1u)%3u); }
+                        if((keyMask|repeatMask) & KEY_EVENT_PA5) { Timer_Adjust(1); }
+                        if((keyMask|repeatMask) & KEY_EVENT_PA6) { Timer_Adjust(-1); }
+                        if(keyMask & KEY_EVENT_PA7) { (void)Timer_Start(now); }
+                    }
+                } else if(s_timerMode==TIMER_VIEW) {
+                    if(longMask & KEY_EVENT_PA4) { Screen_ToTime(now); }           /* 长按2秒PA4: 回时间界面 */
+                    else if(repeatMask & KEY_EVENT_PA5) { Timer_CancelEarly(now); Screen_ToTime(now); }
+                    else if(releaseMask & KEY_EVENT_PA4) { s_timerMode=TIMER_RUN; }
+                } else if(s_timerMode==TIMER_RUN) {
+                    if(longMask & KEY_EVENT_PA4) { Screen_ToTime(now); }           /* 长按2秒PA4: 回时间界面(倒计时继续) */
+                    /* V15 behaviour kept: a short PA5 shows the progress screen
+                     * again while the countdown keeps running. */
+                    else if((keyMask & KEY_EVENT_PA5) && !Timer_Pa5Blocked(now)) { s_timerMode=TIMER_VIEW; }
+                } else { Screen_ToTime(now); }
             } else {
-                uint8_t pa4Pass=(uint8_t)(keyMask & KEY_EVENT_PA4);
-                uint8_t pa5Ok=(uint8_t)((keyMask & KEY_EVENT_PA5)!=0u && !Timer_Pa5Blocked(now));
-                if(s_timerMode==TIMER_VIEW) {
-                    if(repeatMask & KEY_EVENT_PA5) { Timer_CancelEarly(now); }
-                    else if(keyMask & KEY_EVENT_PA4) { s_timerMode=TIMER_RUN; }
-                } else if(s_timerMode==TIMER_IDLE && pa5Ok) { Timer_EnterSetup(); }
-                else if(s_timerMode==TIMER_RUN && pa5Ok) { s_timerMode=TIMER_VIEW; }
-                else { View_Step(now,pa4Pass); }
+                /* --- clock screen ------------------------------------------- */
+                if(keyMask & KEY_EVENT_PA5) { Menu_Enter(); }                      /* 短按PA5: 打开设置界面 */
+                else {
+                    uint8_t pa4=(uint8_t)(((keyMask & KEY_EVENT_PA4)!=0u && !Pa4_ViewBlocked(now))?KEY_EVENT_PA4:0u);
+                    View_Step(now,pa4);                                            /* 流动表盘 <-> 黑洞时间界面 */
+                }
             }
-            if(s_timerMode==TIMER_SET) { Scene_TimerSetup(now,s_timerHour,s_timerMinute,s_timerSecond,s_timerSelected); LED_Off(); }
-            else if(s_timerMode==TIMER_VIEW) { Timer_RenderProgress(now); }
-            else if(s_timerMode==TIMER_ALARM) { Alert_Update(now); oledDirty=Scene_Alarm(now); }
-            else {
-                if(s_timerMode==TIMER_RUN) { LED_On(); } else { LED_Off(); }
-                if(s_transOn) {
-                    uint16_t p=View_Progress(now);
-                    RenderView(s_transFrom,t,ms,&info); CopyGram(s_gramA); RenderView(s_transTo,t,ms,&info); CopyGram(s_gramB); Scene_Compose(s_gramA,s_gramB,p);
-                } else { RenderView(s_view,t,ms,&info); }
-            }
+            /* --- 3) render whatever screen is current now -------------------- */
+            if(s_timerMode==TIMER_ALARM) { Alert_Update(now); oledDirty=Scene_Alarm(now); }
+            else if(s_screen==SCR_MENU) { Scene_Menu(t,s_menuSel); }
+            else if(s_screen==SCR_STOP) {
+                if(s_stopFresh) { s_stopFresh=0u; OLED_Clear(); }
+                else { oledDirty=0u; }
+            } else if(s_screen==SCR_TIMER) {
+                if(s_timerMode==TIMER_SET) { Scene_TimerSetup(now,s_timerHour,s_timerMinute,s_timerSecond,s_timerSelected); }
+                else if(s_timerMode==TIMER_VIEW) { Timer_RenderProgress(now); }
+                else { RenderTimeScreen(now,t,ms,&info); }
+            } else { RenderTimeScreen(now,t,ms,&info); }
+            Led_FollowTimer();
         }
         if(oledDirty) { OLED_Update(); }
+#if defined(FW_SIMULATOR)
+        if(Sim_Yield()) { return 0; }   /* one hardware loop iteration per call */
+#endif
     }
 }

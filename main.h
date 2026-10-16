@@ -26,7 +26,9 @@
 #define KEY_DEBOUNCE_MS 20u
 #define KEY_REPEAT_DELAY_MS 2000u
 #define KEY_REPEAT_RATE_MS 100u
-#define PA5_BLOCK_MS 1000u
+#define KEY_LONG_MS 2000u        /* V18:长按判定 2 秒, PA4 用它返回时间界面 */
+#define PA5_BLOCK_MS 1000u       /* 取消倒计时后 1 秒内 PA5 防误触 */
+#define PA4_BLOCK_MS 1000u       /* 回到时间界面后 1 秒内 PA4 防误触 */
 #define KEY_ACTIVE_HIGH 1u
 #if KEY_ACTIVE_HIGH
 #define KEY_PRESSED_LEVEL 1u
@@ -162,6 +164,8 @@ void Clock_SetTime(uint8_t h, uint8_t m, uint8_t s);
 void Key_Init(void);
 uint8_t Key_Scan(uint32_t nowMs);
 uint8_t Key_Repeat(void);
+uint8_t Key_Long(void);          /* V18: 每个按键的长按(2s)事件, 每次按住只报一次 */
+uint8_t Key_Release(void);       /* V18: 短按抬起事件(按住不足 2s 才产生) */
 uint8_t Key_IsDown(void);
 uint8_t Key_Level(void);
 void LED_Init(void);
@@ -180,6 +184,9 @@ int16_t DS18B20_GetTenths(void);
 int32_t Sin14(uint16_t a);
 int32_t Cos14(uint16_t a);
 void Scene_BlackHole(uint32_t tMs, uint32_t msOfDay, const SceneInfo *info);
+/* V18 settings screen: two icons only (铃声 left, 秒表 right) with continuous
+ * rounded-square borders; the selected border blinks, the icon never blinks. */
+void Scene_Menu(uint32_t tMs, uint8_t sel);
 void Scene_TimerSetup(uint32_t tMs, uint8_t h, uint8_t m, uint8_t s, uint8_t selected);
 void Scene_TimerProgress(uint32_t tMs, uint32_t remainMs, uint32_t pct);
 void Scene_Compose(uint8_t a[OLED_H/8][OLED_W], uint8_t b[OLED_H/8][OLED_W], uint16_t p);

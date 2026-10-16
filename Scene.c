@@ -1653,7 +1653,10 @@ static void Stroke_DrawAt(int32_t cx,int32_t cy)
 void Scene_DrawStrokeNum(int32_t cx,int32_t cy,uint8_t v,uint32_t nowMs)
 {
     uint8_t w[2],i,canDraw,canMove;
-    int32_t x,y,dx,dy,sx,sy,nx,ny,tx,ty,curDist,moveDist,bestMoveDist,fromX,fromY;
+    int32_t dx,dy,sx,sy,nx,ny,tx,ty,curDist,moveDist,bestMoveDist,fromX,fromY;
+#if defined(FW_SIMULATOR)
+    int32_t x,y;   /* only the simulator's frame snapshot walks the buffer */
+#endif
     s_hourLastDrawn=0u;
     w[0]=(uint8_t)(v/10u); w[1]=(uint8_t)(v%10u);
     for(i=0u;i<2u;i++) { if(s_hv[i]!=w[i]) { Stroke_Build(i,w[i]); s_hv[i]=w[i]; } }
@@ -1942,4 +1945,141 @@ uint8_t Scene_Alarm(uint32_t nowMs)
     for(i=0u;i<10u;i++) { tmp=s_fwClock/260u+(uint32_t)i*3u; if((tmp&3u)!=0u) { OLED_DrawPixel(s_starXY[i][0],s_starXY[i][1],OLED_WHITE); } }
     for(px=0;px<128;px+=2) { if(((px+(int32_t)(s_fwClock/50u))&15)<7) { OLED_DrawPixel(px,61,OLED_WHITE); } }
     Fw_Draw(); CatAnim_Draw(); return 1u;
+}
+
+/* ===========================================================================
+ * V18 settings screen  (设置界面)
+ * ---------------------------------------------------------------------------
+ * Behaviour required by the specification:
+ *   - the screen shows EXACTLY two icons and no text at all (no Chinese,
+ *     no English, nothing else);
+ *   - 铃声 / 倒计时 (bell) is on the LEFT, 秒表 (stopwatch) is on the RIGHT;
+ *   - each icon is enclosed by a continuous, unbroken, thin rounded square
+ *     ("钝角的正方形" = obtuse/rounded corners, 1 pixel wide);
+ *   - the square of the SELECTED icon blinks, the icon itself never blinks.
+ * main.c owns selection and key handling; this block only draws.
+ *
+ * Geometry is symmetric about the square centre by construction: every row is
+ * emitted as a mirrored pair around lx = 23.5 of a 48 pixel box, so the two
+ * icons are pixel-symmetric and can never drift.
+ * =========================================================================== */
+#define MENU_BOX      48u      /* square side in pixels                      */
+#define MENU_BOX_Y     8       /* top edge of both squares                   */
+#define MENU_BOX_LX   11       /* left  square spans x = 11..58              */
+#define MENU_BOX_RX   69       /* right square spans x = 69..116             */
+#define MENU_RADIUS   10       /* obtuse corner radius                       */
+#define MENU_BLINK_MS 400u     /* selected border blink half period (0.8 s)   */
+
+/* ---- symmetric primitives (local coordinates: lx 0..47, ly 0..47) -------- */
+static void Menu_LocalPix(int32_t x0,int32_t ly,int32_t lx,uint8_t c)
+{
+    OLED_DrawPixel(x0+lx,MENU_BOX_Y+ly,c);
+}
+/* One row, mirrored: hw = half width in pixels, centred on lx 23.5 */
+static void Menu_RowPair(int32_t x0,int32_t ly,int32_t hw,uint8_t c)
+{
+    int32_t lx;
+    if(hw<=0 || ly<0 || ly>=(int32_t)MENU_BOX) { return; }
+    if(hw>24) { hw=24; }
+    for(lx=24-hw;lx<=23;lx++) {
+        Menu_LocalPix(x0,ly,lx,c);
+        Menu_LocalPix(x0,ly,47-lx,c);
+    }
+}
+/* Solid disc, mirrored */
+static void Menu_Disc(int32_t x0,int32_t ly,int32_t r,uint8_t c)
+{
+    int32_t dy,hw;
+    for(dy=-r;dy<=r;dy++) { hw=(int32_t)OLED_Isqrt((uint32_t)(r*r-dy*dy)); Menu_RowPair(x0,ly+dy,hw+1,c); }
+}
+/* Thin arc, mirrored, angles in degrees (0 = 3 o'clock, y grows downwards) */
+static void Menu_ArcPair(int32_t x0,int32_t lx,int32_t ly,int32_t r,int32_t a0,int32_t a1,uint8_t c)
+{
+    int32_t a;
+    for(a=a0;a<=a1;a+=1) {
+        uint16_t q=(uint16_t)((uint32_t)((a%360+360)%360)*65536u/360u);
+        int32_t dx=(r*Cos14(q))/16384;
+        int32_t dy=-(r*Sin14(q))/16384;
+        Menu_LocalPix(x0,ly+dy,lx+dx,c);
+        Menu_LocalPix(x0,ly+dy,47-(lx+dx),c);
+    }
+}
+static void Menu_PixRange(int32_t x0,int32_t ly,int32_t lx0,int32_t lx1,uint8_t c)
+{
+    int32_t lx;
+    for(lx=lx0;lx<=lx1;lx++) { Menu_LocalPix(x0,ly,lx,c); }
+}
+
+/* ---- 铃声 (bell) --------------------------------------------------------- */
+/* Dome profile: half width per row, from the crown down to the rim.
+ * The first rows round the shoulder off, then the sides open up almost
+ * vertically - that silhouette is what reads as a bell (the reference photo's
+ * bell is a filled dome with a wide rim, a clapper and ring waves). */
+static const uint8_t s_bellHW[22]={
+    2u,4u,5u,6u,7u,8u,8u,9u,9u,9u,9u,10u,10u,10u,10u,11u,11u,11u,11u,12u,12u,11u
+};
+/* Menu_ArcPair draws a mirrored pair of arcs; drawing the same radius twice
+ * fills the +-1 degree neighbour, which is what makes the wave 2 px thick and
+ * continuous instead of a dotted 1 px line. */
+static void Menu_Bell(int32_t x0,int32_t lyc)
+{
+    int32_t r;
+    /* ring waves: two radii per side. Where an arc runs behind the bell body it
+     * is covered by the (white) body, so the visible parts are exactly the four
+     * waves of the reference picture. */
+    for(r=15;r<=16;r++) { Menu_ArcPair(x0,24,lyc,r,30,66,OLED_WHITE); }        /* upper wave  */
+    for(r=18;r<=19;r++) { Menu_ArcPair(x0,24,lyc,r,34,68,OLED_WHITE); }        /* upper, outer */
+    for(r=16;r<=17;r++) { Menu_ArcPair(x0,24,lyc,r,-64,-22,OLED_WHITE); }      /* lower wave  */
+    for(r=19;r<=20;r++) { Menu_ArcPair(x0,24,lyc,r,-60,-24,OLED_WHITE); }      /* lower, outer */
+    /* crown stem + dome + rim */
+    Menu_RowPair(x0,lyc-18,2,OLED_WHITE);
+    Menu_RowPair(x0,lyc-17,3,OLED_WHITE);
+    for(r=0;r<22;r++) { Menu_RowPair(x0,lyc-16+r,(int32_t)s_bellHW[r],OLED_WHITE); }
+    /* clapper, separated from the rim by a dark gap */
+    Menu_RowPair(x0,lyc+8,5,OLED_WHITE);
+    Menu_RowPair(x0,lyc+9,5,OLED_WHITE);
+    Menu_RowPair(x0,lyc+10,4,OLED_WHITE);
+    Menu_RowPair(x0,lyc+11,2,OLED_WHITE);
+}
+
+/* ---- 秒表 (stopwatch) ---------------------------------------------------- */
+static void Menu_Stopwatch(int32_t x0,int32_t lyc)
+{
+    /* NOTE: Menu_* helpers take LOCAL cell coordinates, while OLED_* primitives
+     * take SCREEN coordinates. Mixing the two shifted the dial by MENU_BOX_Y -
+     * every coordinate below is converted once, at the top. */
+    int32_t sx=x0+23, sy=MENU_BOX_Y+lyc;
+    int32_t cq=sx*256+128, dq=sy*256+128;
+    /* The reference picture is an orange dial with a white ring; inverted for a
+     * 1-bit OLED that is a 2 px white ring on a dark face. */
+    OLED_DrawCircle(sx,sy,15,OLED_WHITE);
+    OLED_DrawCircle(sx,sy,14,OLED_WHITE);              /* 2 px bezel */
+    Menu_Disc(x0,lyc,13,OLED_BLACK);                   /* dark face  */
+    Menu_PixRange(x0,lyc-12,23,25,OLED_WHITE);         /* 12 o'clock marker */
+    Menu_PixRange(x0,lyc-11,23,25,OLED_WHITE);
+    Menu_PixRange(x0,lyc-10,23,25,OLED_WHITE);
+    Menu_PixRange(x0,lyc-9,23,25,OLED_WHITE);
+    Menu_PixRange(x0,lyc-8,23,25,OLED_WHITE);
+    /* hand towards 10 o'clock + centre hub */
+    OLED_DrawBrushSegQ8(cq,dq,2*256,cq-7*256,dq-9*256,1*256,OLED_WHITE);
+    OLED_FillDiscQ8(cq,dq,2*256,OLED_WHITE);
+}
+
+/* ---- 设置界面 ------------------------------------------------------------ */
+/* icon: 0 = 铃声(bell), 1 = 秒表(stopwatch).  selected: 1 = this cell is the
+ * current choice, its border blinks.  The two flags are deliberately separate:
+ * an earlier version overloaded one variable and the icons ended up swapped. */
+static void Menu_Cell(int32_t x0,uint8_t icon,uint8_t selected,uint8_t blinkOn)
+{
+    int32_t x1=x0+(int32_t)MENU_BOX-1;
+    int32_t y1=MENU_BOX_Y+(int32_t)MENU_BOX-1;
+    if(!selected || blinkOn) { OLED_DrawRoundRect(x0,MENU_BOX_Y,x1,y1,MENU_RADIUS,OLED_WHITE); }
+    if(icon==0u) { Menu_Bell(x0,24); } else { Menu_Stopwatch(x0,24); }
+}
+void Scene_Menu(uint32_t tMs,uint8_t sel)
+{
+    uint8_t blinkOn=(uint8_t)(((tMs/MENU_BLINK_MS)&1u)==0u);
+    OLED_Clear();
+    Menu_Cell((int32_t)MENU_BOX_LX,0u,(uint8_t)(sel==0u),blinkOn);
+    Menu_Cell((int32_t)MENU_BOX_RX,1u,(uint8_t)(sel!=0u),blinkOn);
 }

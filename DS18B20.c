@@ -1,5 +1,23 @@
 /* Original one-wire scheduling/timing. DQ PA3, external 4.7k pull-up. */
 #include "main.h"
+
+#if defined(FW_SIMULATOR)
+/* ---------------------------------------------------------------------------
+ * Browser-simulator sensor model.
+ * The wasm build has no 1-Wire bus and no DWT cycle counter, so the DS18B20
+ * is replaced by a value fed from the page.  Format, scaling and validity
+ * semantics are identical to the real driver (tenths of a degree Celsius,
+ * -880..+2000 raw range), so Scene.c draws exactly the same temperature
+ * field as the board does with a real sensor attached.
+ * ------------------------------------------------------------------------ */
+static uint8_t s_valid=1u;
+static int16_t s_tenths=245;      /* 24.5 C default room temperature */
+extern int16_t Sim_Sensor_Tenths(void);
+void DS18B20_Init(void) { s_valid=1u; s_tenths=245; }
+void DS18B20_Update(uint32_t nowMs) { (void)nowMs; s_tenths=Sim_Sensor_Tenths(); s_valid=1u; }
+uint8_t DS18B20_IsValid(void) { return s_valid; }
+int16_t DS18B20_GetTenths(void) { return s_tenths; }
+#else
 static uint8_t s_valid=0u, s_waiting=0u, s_started=0u, s_timerOk=0u;
 static int16_t s_tenths=0;
 static uint32_t s_lastConv=0u, s_convAt=0u;
@@ -126,3 +144,5 @@ void DS18B20_Update(uint32_t nowMs)
 }
 uint8_t DS18B20_IsValid(void) { return s_valid; }
 int16_t DS18B20_GetTenths(void) { return s_tenths; }
+
+#endif

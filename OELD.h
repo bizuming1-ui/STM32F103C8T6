@@ -35,6 +35,9 @@ void OLED_DrawHLine(int32_t x, int32_t y, int32_t w, uint8_t color);
 void OLED_DrawVLine(int32_t x, int32_t y, int32_t h, uint8_t color);
 void OLED_DrawLine(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t color);
 void OLED_DrawRect(int32_t x, int32_t y, int32_t w, int32_t h, uint8_t color);
+/* V18: continuous 1-pixel rounded-square outline + quarter arcs (menu border) */
+void OLED_DrawCircleQuad(int32_t cx, int32_t cy, int32_t r, uint8_t quad, uint8_t color);
+void OLED_DrawRoundRect(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t r, uint8_t color);
 void OLED_FillRect(int32_t x, int32_t y, int32_t w, int32_t h, uint8_t color);
 uint32_t OLED_Isqrt(uint32_t n);
 void OLED_DrawCircle(int32_t cx, int32_t cy, int32_t r, uint8_t color);
