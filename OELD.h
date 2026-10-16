@@ -29,6 +29,8 @@ void OLED_DelayMs(uint32_t ms);
 void OLED_Clear(void);
 void OLED_Fill(uint8_t color);
 void OLED_SetClipCircle(int32_t cx, int32_t cy, int32_t r);
+/* V20: rectangle clip (pass x1 < x0 to disable) - used by the countdown drum */
+void OLED_SetClipRect(int32_t x0, int32_t y0, int32_t x1, int32_t y1);
 void OLED_DrawPixel(int32_t x, int32_t y, uint8_t color);
 uint8_t OLED_GetPixel(int32_t x, int32_t y);
 void OLED_DrawHLine(int32_t x, int32_t y, int32_t w, uint8_t color);
