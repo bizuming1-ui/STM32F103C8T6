@@ -26,6 +26,9 @@
 #define KEY_DEBOUNCE_MS 20u
 #define KEY_REPEAT_DELAY_MS 2000u
 #define KEY_REPEAT_RATE_MS 100u
+/* V19: 两级快速连按 —— 按住满 2 秒后 100ms/步, 再持续 2 秒(共 4 秒)后提速到 40ms/步 */
+#define KEY_REPEAT_FAST_DELAY_MS 4000u
+#define KEY_REPEAT_FAST_RATE_MS 40u
 #define KEY_LONG_MS 2000u        /* V18:长按判定 2 秒, PA4 用它返回时间界面 */
 #define PA5_BLOCK_MS 1000u       /* 取消倒计时后 1 秒内 PA5 防误触 */
 #define PA4_BLOCK_MS 1000u       /* 回到时间界面后 1 秒内 PA4 防误触 */
@@ -187,8 +190,11 @@ void Scene_BlackHole(uint32_t tMs, uint32_t msOfDay, const SceneInfo *info);
 /* V18 settings screen: two icons only (铃声 left, 秒表 right) with continuous
  * rounded-square borders; the selected border blinks, the icon never blinks. */
 void Scene_Menu(uint32_t tMs, uint8_t sel);
-void Scene_TimerSetup(uint32_t tMs, uint8_t h, uint8_t m, uint8_t s, uint8_t selected);
-void Scene_TimerProgress(uint32_t tMs, uint32_t remainMs, uint32_t pct);
+/* V19 countdown panel (铃声界面): 4 continuous rounded thin frames
+ * [HH]:[MM]:[SS] [Start], small live clock top-right, selected frame blinks. */
+void Scene_TimerPanelReset(void);   /* V20: snap the drum digits without a roll */
+void Scene_TimerPanel(uint32_t tMs, uint32_t msOfDay, uint8_t h, uint8_t m, uint8_t s, uint8_t selected);
+void Scene_TimerRunning(uint32_t msOfDay, uint32_t remainMs, uint32_t pct);
 void Scene_Compose(uint8_t a[OLED_H/8][OLED_W], uint8_t b[OLED_H/8][OLED_W], uint16_t p);
 void Scene_AlarmBegin(uint32_t nowMs);
 uint8_t Scene_Alarm(uint32_t nowMs); /* 1 = framebuffer changed */
