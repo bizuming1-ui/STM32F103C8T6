@@ -9,7 +9,14 @@ static uint8_t s_transferOK=1u;
 #define SDA_H() (OLED_SDA_PORT->BSRR=OLED_SDA_PIN)
 #define SDA_L() (OLED_SDA_PORT->BRR=OLED_SDA_PIN)
 #define SDA_READ() ((OLED_SDA_PORT->IDR & OLED_SDA_PIN)!=0u)
+#if defined(FW_SIMULATOR)
+/* The wasm build has no real bus: the delays only waste time, the pixel data
+ * itself is read straight out of OLED_GRAM by the page. Everything else in
+ * this file (command sequences, geometry, fonts) stays bit-identical. */
+static void I2C_Delay(void) { }
+#else
 static void I2C_Delay(void) { volatile uint32_t n=OLED_I2C_DELAY_TICKS; while(n--) { } }
+#endif
 static void I2C_Stop(void) { SDA_L(); I2C_Delay(); SCL_H(); I2C_Delay(); SDA_H(); I2C_Delay(); }
 static void I2C_Start(void) { SDA_H(); SCL_H(); I2C_Delay(); SDA_L(); I2C_Delay(); SCL_L(); I2C_Delay(); }
 static uint8_t I2C_WriteByte(uint8_t b)
@@ -35,7 +42,11 @@ static void I2C_GPIO_Init(void)
 }
 void OLED_DelayMs(uint32_t ms)
 {
+#if defined(FW_SIMULATOR)
+    (void)ms;   /* no panel warm-up time is needed in the browser */
+#else
     while(ms--) { volatile uint32_t n=12000u; while(n--) { } }
+#endif
 }
 void OLED_WriteCommand(uint8_t cmd)
 {
@@ -129,6 +140,45 @@ void OLED_DrawRect(int32_t x,int32_t y,int32_t w,int32_t h,uint8_t c)
     OLED_DrawHLine(x,y,w,c); OLED_DrawHLine(x,y+h-1,w,c); OLED_DrawVLine(x,y,h,c); OLED_DrawVLine(x+w-1,y,h,c);
 }
 void OLED_FillRect(int32_t x,int32_t y,int32_t w,int32_t h,uint8_t c) { int32_t j; for(j=0;j<h;j++) { OLED_DrawHLine(x,y+j,w,c); } }
+/* Quarter-circle arc: the midpoint circle rasteriser restricted to one
+ * quadrant. quad 0 = right/top, 1 = right/bottom, 2 = left/bottom,
+ * 3 = left/top. The first and last plotted pixels are exactly (cx+r,cy)
+ * and (cx,cy-r) etc., which is what makes the rounded-rectangle corners
+ * join the straight edges with no gap and no double pixel. */
+void OLED_DrawCircleQuad(int32_t cx,int32_t cy,int32_t r,uint8_t quad,uint8_t c)
+{
+    int32_t x=r,y=0,d=1-r;
+    if(r<0) { return; }
+    while(x>=y) {
+        switch(quad) {
+            case 0u: OLED_DrawPixel(cx+x,cy-y,c); OLED_DrawPixel(cx+y,cy-x,c); break;
+            case 1u: OLED_DrawPixel(cx+x,cy+y,c); OLED_DrawPixel(cx+y,cy+x,c); break;
+            case 2u: OLED_DrawPixel(cx-x,cy+y,c); OLED_DrawPixel(cx-y,cy+x,c); break;
+            default: OLED_DrawPixel(cx-x,cy-y,c); OLED_DrawPixel(cx-y,cy-x,c); break;
+        }
+        y++; if(d<0) { d+=2*y+1; } else { x--; d+=2*(y-x)+1; }
+    }
+}
+/* Rounded rectangle outline (obtuse corners), 1 pixel thick, continuous.
+ * It is assembled from four straight runs plus four quarter arcs whose end
+ * pixels coincide with the ends of those runs, so the closed curve can never
+ * break apart - this is the "连续的细线正方形" the settings screen needs. */
+void OLED_DrawRoundRect(int32_t x0,int32_t y0,int32_t x1,int32_t y1,int32_t r,uint8_t c)
+{
+    if(x1<x0 || y1<y0) { return; }
+    if(r<=0) { OLED_DrawRect(x0,y0,x1-x0+1,y1-y0+1,c); return; }
+    if(2*r>x1-x0) { r=(x1-x0+1)/2; }
+    if(2*r>y1-y0) { r=(y1-y0+1)/2; }
+    if(r<1) { r=1; }
+    OLED_DrawHLine(x0+r,y0,x1-x0-2*r+1,c);
+    OLED_DrawHLine(x0+r,y1,x1-x0-2*r+1,c);
+    OLED_DrawVLine(x0,y0+r,y1-y0-2*r+1,c);
+    OLED_DrawVLine(x1,y0+r,y1-y0-2*r+1,c);
+    OLED_DrawCircleQuad(x0+r,y0+r,r,3u,c);
+    OLED_DrawCircleQuad(x1-r,y0+r,r,0u,c);
+    OLED_DrawCircleQuad(x0+r,y1-r,r,2u,c);
+    OLED_DrawCircleQuad(x1-r,y1-r,r,1u,c);
+}
 uint32_t OLED_Isqrt(uint32_t n)
 {
     uint32_t res=0u,bit=1uL<<30;

@@ -17,8 +17,24 @@ static void GPIO_Output2MHz(GPIO_TypeDef *port, uint8_t pin)
     if(pin<8u) { shift=(uint32_t)pin*4u; port->CRL=(port->CRL & ~(0xFuL<<shift)) | (0x2uL<<shift); }
     else { shift=(uint32_t)(pin-8u)*4u; port->CRH=(port->CRH & ~(0xFuL<<shift)) | (0x2uL<<shift); }
 }
-void LED_On(void) { LED_PORT->BRR=LED_PIN; }
-void LED_Off(void) { LED_PORT->BSRR=LED_PIN; }
+#if defined(FW_SIMULATOR)
+/* The simulator cannot watch writes to the write-only BSRR/BRR registers, so
+ * the electrical level of PC13 (LED) and PA8 (buzzer) is mirrored here.
+ * The real bit-band write above/below is untouched: on the board nothing
+ * changes, and the page shows exactly what the pin would do. */
+extern void Sim_LedState(uint8_t on);
+extern void Sim_BuzzerState(uint8_t on);
+#endif
+void LED_On(void) { LED_PORT->BRR=LED_PIN;
+#if defined(FW_SIMULATOR)
+    Sim_LedState(1u);
+#endif
+}
+void LED_Off(void) { LED_PORT->BSRR=LED_PIN;
+#if defined(FW_SIMULATOR)
+    Sim_LedState(0u);
+#endif
+}
 void Buzzer_Tone(uint16_t hz)
 {
 #if BUZZER_MODE_PWM
@@ -44,6 +60,9 @@ void Buzzer_On(void)
 #else
     BUZZER_PORT->BRR=BUZZER_PIN;
 #endif
+#if defined(FW_SIMULATOR)
+    Sim_BuzzerState(1u);
+#endif
 }
 void Buzzer_Off(void)
 {
@@ -53,6 +72,9 @@ void Buzzer_Off(void)
     BUZZER_PORT->BRR=BUZZER_PIN;
 #else
     BUZZER_PORT->BSRR=BUZZER_PIN;
+#endif
+#if defined(FW_SIMULATOR)
+    Sim_BuzzerState(0u);
 #endif
 }
 void LED_Init(void)
