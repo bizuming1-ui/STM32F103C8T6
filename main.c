@@ -363,28 +363,25 @@ static void Timer_EnterSetup(void)
 {
     s_timerReturnView=s_transOn?s_transTo:s_view; s_view=s_timerReturnView; s_timerMode=TIMER_SET;
     s_timerHour=s_timerMinute=s_timerSecond=0u; s_timerSelected=2u; s_transOn=s_pending=0u; Alert_Stop();
+    Scene_TimerPanelReset();   /* V20: the drum digits start settled */
 }
-static void Timer_Adjust(int8_t direction)
+/* V19: the panel edits one field at a time, but the value is a single
+ * 时:分:秒 counter, so carries and borrows come out of plain arithmetic:
+ *   - 秒 field: +-1 s   -> 59+1 rolls the minute up, 00-1 borrows from it
+ *   - 分 field: +-60 s  -> minutes carry into the hour
+ *   - 时 field: +-3600 s-> hours run 00..99 and wrap 99 -> 00
+ * The whole counter wraps at 99:59:59 <-> 00:00:00, so rolling down from
+ * 00:00:00 gives 99:59:59 (hour 00 -> 99) instead of sticking. */
+static void Timer_Step(int8_t direction)
 {
-    if(direction>0) {
-        if(s_timerSelected==0u) { if(s_timerHour<99u) { s_timerHour++; } }
-        else if(s_timerSelected==1u) {
-            if(s_timerMinute<59u) { s_timerMinute++; } else if(s_timerHour<99u) { s_timerMinute=0u; s_timerHour++; }
-        } else {
-            if(s_timerSecond<59u) { s_timerSecond++; }
-            else if(s_timerMinute<59u) { s_timerSecond=0u; s_timerMinute++; }
-            else if(s_timerHour<99u) { s_timerSecond=s_timerMinute=0u; s_timerHour++; }
-        }
-    } else if(direction<0) {
-        if(s_timerSelected==0u) { if(s_timerHour>0u) { s_timerHour--; } }
-        else if(s_timerSelected==1u) {
-            if(s_timerMinute>0u) { s_timerMinute--; } else if(s_timerHour>0u) { s_timerMinute=59u; s_timerHour--; }
-        } else {
-            if(s_timerSecond>0u) { s_timerSecond--; }
-            else if(s_timerMinute>0u) { s_timerSecond=59u; s_timerMinute--; }
-            else if(s_timerHour>0u) { s_timerSecond=s_timerMinute=59u; s_timerHour--; }
-        }
-    }
+    uint32_t total=Timer_TotalSeconds();
+    uint32_t step=(s_timerSelected==0u)?3600u:((s_timerSelected==1u)?60u:1u);
+    uint32_t span=99u*3600u+59u*60u+59u+1u;      /* 360000 = 100 h in seconds */
+    if(direction>0) { total+=step; if(total>=span) { total-=span; } }
+    else if(direction<0) { if(total<step) { total+=span-step; } else { total-=step; } }
+    s_timerHour=(uint8_t)(total/3600u);
+    s_timerMinute=(uint8_t)((total/60u)%60u);
+    s_timerSecond=(uint8_t)(total%60u);
 }
 static uint8_t Timer_Start(uint32_t now)
 {
@@ -441,11 +438,14 @@ static void Led_FollowTimer(void)
     if(s_timerMode==TIMER_RUN || s_timerMode==TIMER_VIEW) { LED_On(); }
     else if(s_timerMode!=TIMER_ALARM) { LED_Off(); }
 }
-static void Timer_RenderProgress(uint32_t now)
+static void Timer_RenderProgress(uint32_t now,uint32_t msOfDay)
 {
-    uint32_t elapsed=now-s_timerStart,remain,pct=0u;
-    if(elapsed>s_timerDuration) { elapsed=s_timerDuration; } remain=s_timerDuration-elapsed;
-    if(s_timerDuration>=1000u) { pct=elapsed/(s_timerDuration/1000u); } Scene_TimerProgress(now,remain,pct);
+    uint32_t elapsed=now-s_timerStart,remain,pct;
+    if(elapsed>s_timerDuration) { elapsed=s_timerDuration; }
+    remain=s_timerDuration-elapsed;
+    pct=s_timerDuration?(elapsed*1000u/s_timerDuration):1000u;
+    if(pct>1000u) { pct=1000u; }
+    Scene_TimerRunning(msOfDay,remain,pct);
 }
 static void View_Step(uint32_t now,uint8_t keyEv)
 {
@@ -569,17 +569,23 @@ sim_loop_body: ;
                 if(longMask & KEY_EVENT_PA4) { Screen_ToTime(now); }              /* 长按2秒PA4: 回时间界面 */
             } else if(s_screen==SCR_TIMER) {
                 if(s_timerMode==TIMER_SET) {
+                    /* 长按2秒PA4: 回时间界面(并武装1秒PA4防误触) */
                     if(longMask & KEY_EVENT_PA4) { s_timerMode=TIMER_IDLE; Screen_ToTime(now); }
                     else {
-                        if(releaseMask & KEY_EVENT_PA4) { s_timerSelected=(uint8_t)((s_timerSelected+1u)%3u); }
-                        if((keyMask|repeatMask) & KEY_EVENT_PA5) { Timer_Adjust(1); }
-                        if((keyMask|repeatMask) & KEY_EVENT_PA6) { Timer_Adjust(-1); }
-                        if(keyMask & KEY_EVENT_PA7) { (void)Timer_Start(now); }
+                        /* PA4 短按: 时 -> 分 -> 秒 -> Start -> 时 */
+                        if(releaseMask & KEY_EVENT_PA4) { s_timerSelected=(uint8_t)((s_timerSelected+1u)&3u); }
+                        /* PA5/PA6 只改动数字栏; 选中 Start 时它们不再改变数值 */
+                        if(s_timerSelected<3u) {
+                            if((keyMask|repeatMask) & KEY_EVENT_PA5) { Timer_Step(1); }
+                            if((keyMask|repeatMask) & KEY_EVENT_PA6) { Timer_Step(-1); }
+                        }
+                        /* PA7 = Start: 开始倒计时并回到时间界面 */
+                        if(keyMask & KEY_EVENT_PA7) { if(Timer_Start(now)) { s_screen=SCR_TIME; } }
                     }
                 } else if(s_timerMode==TIMER_VIEW) {
-                    if(longMask & KEY_EVENT_PA4) { Screen_ToTime(now); }           /* 长按2秒PA4: 回时间界面 */
+                    /* 运行中界面: 只有长按才有动作(避免误触), 短按不做任何事 */
+                    if(longMask & KEY_EVENT_PA4) { s_timerMode=TIMER_RUN; Screen_ToTime(now); }
                     else if(repeatMask & KEY_EVENT_PA5) { Timer_CancelEarly(now); Screen_ToTime(now); }
-                    else if(releaseMask & KEY_EVENT_PA4) { s_timerMode=TIMER_RUN; }
                 } else if(s_timerMode==TIMER_RUN) {
                     if(longMask & KEY_EVENT_PA4) { Screen_ToTime(now); }           /* 长按2秒PA4: 回时间界面(倒计时继续) */
                     /* V15 behaviour kept: a short PA5 shows the progress screen
@@ -601,8 +607,8 @@ sim_loop_body: ;
                 if(s_stopFresh) { s_stopFresh=0u; OLED_Clear(); }
                 else { oledDirty=0u; }
             } else if(s_screen==SCR_TIMER) {
-                if(s_timerMode==TIMER_SET) { Scene_TimerSetup(now,s_timerHour,s_timerMinute,s_timerSecond,s_timerSelected); }
-                else if(s_timerMode==TIMER_VIEW) { Timer_RenderProgress(now); }
+                if(s_timerMode==TIMER_SET) { Scene_TimerPanel(t,ms,s_timerHour,s_timerMinute,s_timerSecond,s_timerSelected); }
+                else if(s_timerMode==TIMER_VIEW) { Timer_RenderProgress(now,ms); }
                 else { RenderTimeScreen(now,t,ms,&info); }
             } else { RenderTimeScreen(now,t,ms,&info); }
             Led_FollowTimer();
