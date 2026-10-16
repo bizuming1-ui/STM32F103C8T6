@@ -1759,59 +1759,284 @@ void Scene_BlackHole(uint32_t tMs,uint32_t msOfDay,const SceneInfo *info)
     } }
     for(c=0;c<4;c++) { OLED_DrawPixel(s_star[c][0],s_star[c][1],OLED_WHITE); } DrawInfo(info);
 }
-static int32_t ArcX(int32_t y) { int32_t dy=y-32; return -62+(int32_t)OLED_Isqrt((uint32_t)(94*94-dy*dy)); }
-static void Timer_DrawArc(uint32_t tMs)
+/* ===========================================================================
+ * V20 countdown panel  ("铃声界面")  --  password-lock (drum) style
+ * ---------------------------------------------------------------------------
+ * Layout: black background, white 1-pixel drawing only.
+ *
+ *      ┌───────────┐   ┌───────────┐   ┌───────────┐   ┌─────────────┐
+ *      │    0 9    │   │    5 8    │   │    3 4    │   │             │
+ *      │   1 0     │ : │   5 9     │ : │   3 5     │   │    Start    │
+ *      │    1 1    │   │    0 0    │   │    3 6    │   │             │
+ *      └───────────┘   └───────────┘   └───────────┘   └─────────────┘
+ *         时 00-99         分 00-59         秒 00-59       Start / %
+ *                                                       23:59 <- live clock
+ *
+ *  - the middle row is the value being edited (large digit), the rows above and
+ *    below show the neighbouring values (small digits) exactly like a
+ *    combination lock / drum; they wrap (59 -> 00) together with the carries
+ *  - a value change rolls the drum for PN_ROLL_MS; the digits slide and the one
+ *    reaching the centre grows, so the panel feels like a real picker
+ *  - the four frames are all exactly the same height and aligned; the selected
+ *    frame blinks, the digits inside never blink
+ *  - the digits are drawn from one CONNECTED stroke font (2 px round strokes
+ *    for the middle row, 1 px for the small rows): no stroke of any digit is
+ *    ever broken - there is a self test that checks every digit is a single
+ *    connected shape at both sizes
+ *  - nothing but "Start" is written on the screen (plus the small live clock)
+ * =========================================================================== */
+#define PN_BOX_Y0    12                 /* frames: y = 12..59, all four equal */
+#define PN_BOX_Y1    59
+#define PN_BOX_H     (PN_BOX_Y1-PN_BOX_Y0+1)     /* 48 */
+#define PN_BOX_W     25                 /* number frame width                */
+#define PN_BOX_B1    1                  /* hour   frame  x = 1..25           */
+#define PN_BOX_B2    32                 /* minute frame  x = 32..56          */
+#define PN_BOX_B3    63                 /* second frame  x = 63..87          */
+#define PN_BOX_B4    94                 /* Start  frame  x = 94..126         */
+#define PN_BOX_B4W   33
+#define PN_RADIUS    7                  /* obtuse (rounded) corners          */
+#define PN_CY0       19                 /* drum row centres: 19 / 36 / 53    */
+#define PN_CY1       36
+#define PN_CY2       53
+#define PN_PITCH     17                 /* row pitch = 17 px (drum geometry) */
+#define PN_BLINK_MS  400u               /* selected-frame blink half period  */
+#define PN_ROLL_MS   140u               /* drum roll duration after a change */
+#define PN_BAR_Y     61                 /* progress bar (running view)       */
+#define PN_BAR_X0    2
+#define PN_BAR_X1    125
+
+/* ---------------- connected stroke digit font ------------------------------
+ * Glyph space: x = 0..20, y = 0..40 in HALF pixels (a 10x20 px cell at scale
+ * 1). Every digit is defined by polylines; a digit made of two polylines has
+ * them crossing, so the rendered ink is one single connected shape. Zooming to
+ * the small rows is a 0.5 coordinate scale plus a pixel-centre snap, which
+ * keeps the 1 px strokes crisp and still connected. */
+typedef struct { int8_t x,y; } PanelPt;
+typedef struct { const PanelPt *p; uint8_t n; } PanelPath;
+typedef struct { const PanelPath *paths; uint8_t n; } PanelGlyph;
+
+static const PanelPt pnP0[] = {{2,6},{6,2},{14,2},{18,6},{18,34},{14,38},{6,38},{2,34},{2,6}};
+static const PanelPt pnP1a[] = {{8,6},{14,2},{14,38}};
+static const PanelPt pnP1b[] = {{6,38},{18,38}};
+static const PanelPt pnP2[] = {{2,6},{6,2},{14,2},{18,6},{18,13},{3,38},{18,38}};
+static const PanelPt pnP3[] = {{3,3},{7,2},{13,2},{18,7},{18,13},{11,19},{10,20},{11,21},{18,27},{18,33},{13,38},{7,38},{2,36}};
+static const PanelPt pnP4a[] = {{13,2},{2,25},{18,25}};
+static const PanelPt pnP4b[] = {{13,2},{13,38}};
+static const PanelPt pnP5[] = {{18,2},{2,2},{2,17},{12,13},{18,18},{18,34},{13,38},{6,38},{2,35}};
+static const PanelPt pnP6[] = {{15,2},{6,3},{2,10},{2,32},{6,38},{13,38},{18,32},{18,26},{13,21},{7,21},{2,26}};
+static const PanelPt pnP7[] = {{2,2},{18,2},{7,38}};
+static const PanelPt pnP8a[] = {{6,2},{14,2},{18,6},{18,14},{14,20},{6,20},{2,14},{2,6},{6,2}};
+static const PanelPt pnP8b[] = {{6,20},{14,20},{18,26},{18,34},{14,38},{6,38},{2,34},{2,26},{6,20}};
+static const PanelPt pnP9[] = {{5,38},{12,37},{18,30},{18,8},{14,2},{7,2},{2,7},{2,14},{6,20},{12,20},{18,15}};
+
+static const PanelPath pnG0[1]={{pnP0,9}};
+static const PanelPath pnG1[2]={{pnP1a,3},{pnP1b,2}};
+static const PanelPath pnG2[1]={{pnP2,7}};
+static const PanelPath pnG3[1]={{pnP3,13}};
+static const PanelPath pnG4[2]={{pnP4a,3},{pnP4b,2}};
+static const PanelPath pnG5[1]={{pnP5,9}};
+static const PanelPath pnG6[1]={{pnP6,11}};
+static const PanelPath pnG7[1]={{pnP7,3}};
+static const PanelPath pnG8[2]={{pnP8a,9},{pnP8b,9}};
+static const PanelPath pnG9[1]={{pnP9,11}};
+static const PanelGlyph s_pnGlyph[10]={
+    {pnG0,1},{pnG1,2},{pnG2,1},{pnG3,1},{pnG4,2},{pnG5,1},{pnG6,1},{pnG7,1},{pnG8,2},{pnG9,1}
+};
+/* One glyph. ox/oy = top-left corner of the digit cell in screen pixels.
+ * small=0: 10x20 px cell, 2 px round strokes.
+ * small=1: 6x11 px cell, 1 px strokes snapped to the pixel centres. */
+static void Panel_Glyph(int32_t ox,int32_t oy,uint8_t d,uint8_t small)
 {
-    int32_t y,x,x0,ax,d,fall,light,thr,s,wave,row,cy,value,sx;
-    uint32_t posI,frac;
-    for(y=0;y<64;y++) {
-        ax=ArcX(y); x0=ax-30; if(x0<0) { x0=0; }
-        for(x=x0;x<=ax-2;x++) {
-            d=ax-x; fall=255-d*8; s=Sin14((uint16_t)((uint32_t)d*6554u-tMs*94u)); light=fall*(s+16384)/32768;
-            thr=(int32_t)s_bayer[((y&3)<<2)|(x&3)]*16+8; if(light>thr) { OLED_DrawPixel(x,y,OLED_WHITE); }
+    const PanelGlyph *g;
+    uint8_t pi,k;
+    if(d>9u) { return; }
+    g=&s_pnGlyph[d];
+    for(pi=0u;pi<g->n;pi++) {
+        const PanelPath *p=&g->paths[pi];
+        for(k=0u;k+1u<p->n;k++) {
+            int32_t x0,y0,x1,y1,r;
+            if(!small) {
+                x0=ox*256+(int32_t)p->p[k].x*128;   y0=oy*256+(int32_t)p->p[k].y*128;
+                x1=ox*256+(int32_t)p->p[k+1].x*128; y1=oy*256+(int32_t)p->p[k+1].y*128;
+                r=128;
+            } else {
+                /* half scale: 5 px wide, 9 px tall; the vertical map is slightly
+                 * compressed so the small rows keep a 2 px air gap to the large
+                 * digits above and below them */
+                x0=(ox+(((int32_t)p->p[k].x+2)>>2))*256+128;         y0=(oy+1+(((int32_t)p->p[k].y*7+16)>>5))*256+128;
+                x1=(ox+(((int32_t)p->p[k+1].x+2)>>2))*256+128;       y1=(oy+1+(((int32_t)p->p[k+1].y*7+16)>>5))*256+128;
+                r=0;
+            }
+            OLED_DrawBrushSegQ8(x0,y0,r,x1,y1,r,OLED_WHITE);
         }
     }
-    for(row=0;row<4;row++) { for(x=39;x<128;x++) {
-        wave=Sin14((uint16_t)((uint32_t)x*900u+tMs*40u))*2/16384; y=(x-63)*(x-63)/245-row*2+1+wave;
-        if(((x+row*11+(int32_t)(tMs/45u))&7)!=0) { OLED_DrawPixel(x,y,OLED_WHITE); OLED_DrawPixel(x,63-y,OLED_WHITE); }
-    } }
-    for(y=0;y<64;y++) { ax=ArcX(y); OLED_FillRect(ax-1,y,17,1,OLED_BLACK); OLED_DrawPixel(ax-1,y,OLED_WHITE); }
-    posI=tMs/420u; frac=(tMs%420u)*7u/420u;
-    for(row=-1;row<=9;row++) {
-        cy=3+row*7+(int32_t)frac; sx=(cy<0)?0:((cy>63)?63:cy); ax=ArcX(sx);
-        value=(int32_t)((posI%60u)+8u)-row; value=((value%60)+60)%60;
-        OLED_DrawTinyNum2(ax+5,cy,(uint8_t)value,OLED_WHITE); OLED_DrawHLine(ax+10,cy,(value%5==0)?5:2,OLED_WHITE); OLED_DrawPixel(ax+10,cy+3,OLED_WHITE);
+}
+/* One drum row: the two digits of a value, centred in the frame. */
+static void Panel_Row(int32_t fx0,int32_t fw,int32_t cy,uint8_t v,uint8_t small)
+{
+    int32_t inner_x=fx0+2,inner_w=fw-4,ox;
+    if(v>99u) { v=99u; }
+    if(!small) {
+        ox=inner_x+(inner_w-21)/2;
+        Panel_Glyph(ox,cy-10,(uint8_t)(v/10u),0u);
+        Panel_Glyph(ox+11,cy-10,(uint8_t)(v%10u),0u);
+    } else {
+        ox=inner_x+(inner_w-13)/2;
+        Panel_Glyph(ox,cy-5,(uint8_t)(v/10u),1u);
+        Panel_Glyph(ox+7,cy-5,(uint8_t)(v%10u),1u);
     }
-    for(y=0;y<64;y++) { ax=ArcX(y);
-        if(((y*5+(int32_t)(tMs/30u))&15)==0) { OLED_DrawPixel(ax-6,y,OLED_WHITE); }
-        if(((y*3-(int32_t)(tMs/45u))&7)==0) { OLED_DrawPixel(ax-12,y,OLED_WHITE); }
+}
+/* ---------------- frames / clock / text ---------------------------------- */
+static void Panel_BoxFrame(uint8_t idx,uint8_t selected,uint8_t blinkOn)
+{
+    int32_t x0,w;
+    if(idx==0u) { x0=PN_BOX_B1; w=PN_BOX_W; }
+    else if(idx==1u) { x0=PN_BOX_B2; w=PN_BOX_W; }
+    else if(idx==2u) { x0=PN_BOX_B3; w=PN_BOX_W; }
+    else { x0=PN_BOX_B4; w=PN_BOX_B4W; }
+    if(!selected || blinkOn) { OLED_DrawRoundRect(x0,PN_BOX_Y0,x0+w-1,PN_BOX_Y1,PN_RADIUS,OLED_WHITE); }
+}
+static void Panel_Colons(void)
+{
+    OLED_FillRect(28,30,2,2,OLED_WHITE); OLED_FillRect(28,40,2,2,OLED_WHITE);
+    OLED_FillRect(59,30,2,2,OLED_WHITE); OLED_FillRect(59,40,2,2,OLED_WHITE);
+}
+/* small live clock, right aligned in the top right corner ("HH:MM") */
+static void Panel_Clock(uint32_t msOfDay)
+{
+    char b[6];
+    uint8_t hh=(uint8_t)((msOfDay/3600000u)%24u),mm=(uint8_t)((msOfDay/60000u)%60u);
+    b[0]=(char)('0'+hh/10u); b[1]=(char)('0'+hh%10u); b[2]=':';
+    b[3]=(char)('0'+mm/10u); b[4]=(char)('0'+mm%10u); b[5]=0;
+    OLED_ShowString(98,1,b,OLED_WHITE);
+}
+static void Panel_Base(uint32_t msOfDay) { OLED_Clear(); Panel_Clock(msOfDay); Panel_Colons(); }
+static void Panel_CentreText(int32_t x0,int32_t w,const char *t)
+{
+    int32_t n=0;
+    while(t[n]) { n++; }
+    OLED_ShowString(x0+(w-(n*6-1))/2,PN_BOX_Y0+(PN_BOX_H-8)/2,t,OLED_WHITE);
+}
+/* ---------------- drum state (self-contained in Scene.c) ------------------ */
+static uint8_t s_pnPrev[3]={0xFFu,0xFFu,0xFFu};
+static uint8_t s_pnDir[3]={0u,0u,0u};
+static uint32_t s_pnRollAt[3]={0u,0u,0u};
+/* Wrap around the field range: hour 0..99, minute/second 0..59. */
+static uint8_t Panel_Wrap(uint8_t field,int32_t v)
+{
+    int32_t lo=(field==0u)?100:60;
+    v%=lo; if(v<0) { v+=lo; }
+    return (uint8_t)v;
+}
+/* Draw the drum of one number frame: the value `v` sits in the middle row, the
+ * neighbours above/below are the small candidates, and while a change is being
+ * animated every row slides by the same amount (clipped to the frame). */
+static void Panel_Drum(int32_t fx0,uint8_t fw,uint8_t field,uint32_t tMs,uint8_t v,uint8_t selected,uint8_t blinkOn)
+{
+    int32_t i,j,off=0,n=0;
+    int32_t ys[4],ad[4],order[4];
+    uint8_t ws[4];
+    uint32_t el;
+    if(s_pnPrev[field]!=v) {
+        if(s_pnPrev[field]==0xFFu) { s_pnDir[field]=0u; }
+        else {
+            int32_t lo=(field==0u)?100:60;
+            int32_t d=(int32_t)v-(int32_t)s_pnPrev[field];
+            if(d<0) { d+=lo; }
+            /* d==0 cannot happen here; small d = value grew, large d = shrank */
+            s_pnDir[field]=(uint8_t)((d*2<=lo)?1u:2u);
+        }
+        s_pnPrev[field]=v; s_pnRollAt[field]=tMs+1u;
     }
+    if(s_pnRollAt[field]!=0u) {
+        el=(uint32_t)(tMs-(s_pnRollAt[field]-1u));
+        if(el>=PN_ROLL_MS) { s_pnRollAt[field]=0u; }
+        else { off=(int32_t)(PN_PITCH*(PN_ROLL_MS-el)/PN_ROLL_MS); }
+    }
+    Panel_BoxFrame(field,selected,blinkOn);
+    OLED_SetClipRect(fx0+1,PN_BOX_Y0+1,fx0+(int32_t)fw-2,PN_BOX_Y1-1);
+    if(off==0) {
+        /* settled: neighbours above/below are the candidate values */
+        Panel_Row(fx0,fw,PN_CY0,Panel_Wrap(field,(int32_t)v-1),1u);
+        Panel_Row(fx0,fw,PN_CY2,Panel_Wrap(field,(int32_t)v+1),1u);
+        Panel_Row(fx0,fw,PN_CY1,v,0u);
+    } else {
+        /* rolling: every row slides by the same amount; the row that reaches
+         * the centre becomes the large one, so the value appears to grow */
+        if(s_pnDir[field]==1u) {
+            for(i=0;i<4;i++) {
+                int32_t w=(int32_t)v-2+i;
+                ws[n]=Panel_Wrap(field,w);
+                ys[n]=PN_CY1+(w-(int32_t)v)*PN_PITCH+off;
+                n++;
+            }
+        } else {
+            for(i=0;i<4;i++) {
+                int32_t w=(int32_t)v-1+i;
+                ws[n]=Panel_Wrap(field,w);
+                ys[n]=PN_CY1+(w-(int32_t)v)*PN_PITCH-off;
+                n++;
+            }
+        }
+        for(i=0;i<n;i++) { ad[i]=ys[i]-PN_CY1; if(ad[i]<0) { ad[i]=-ad[i]; } }
+        for(i=0;i<n;i++) {
+            int32_t best=-1;
+            for(j=0;j<n;j++) { if(ad[j]<0) { continue; } if(best<0 || ad[j]>ad[best]) { best=j; } }
+            order[i]=best; ad[best]=-1;
+        }
+        for(i=0;i<n;i++) {
+            int32_t d=ys[order[i]]-PN_CY1;
+            if(d<0) { d=-d; }
+            Panel_Row(fx0,fw,ys[order[i]],ws[order[i]],(uint8_t)((d*2>=PN_PITCH)?1u:0u));
+        }
+    }
+    OLED_SetClipRect(0,0,-1,-1);
 }
-static void Timer_DrawDigit(int32_t x,int32_t y,uint8_t d)
+/* Snap all three drums (no roll) - called when the panel is (re)entered so the
+ * first drawn frame is always the settled state. */
+void Scene_TimerPanelReset(void)
 {
-    uint8_t col,row;
-    for(col=0u;col<5u;col++) { for(row=0u;row<7u;row++) { if(s_small[d][col] & (1u<<row)) { OLED_FillRect(x+(int32_t)col*2,y+(int32_t)row*2,2,2,OLED_WHITE); } } }
+    s_pnPrev[0]=0xFFu; s_pnPrev[1]=0xFFu; s_pnPrev[2]=0xFFu;
+    s_pnDir[0]=0u; s_pnDir[1]=0u; s_pnDir[2]=0u;
+    s_pnRollAt[0]=0u; s_pnRollAt[1]=0u; s_pnRollAt[2]=0u;
 }
-static void Timer_DrawPair(int32_t x,uint8_t v) { Timer_DrawDigit(x,27,(uint8_t)(v/10u)); Timer_DrawDigit(x+13,27,(uint8_t)(v%10u)); }
-static void Timer_RenderBase(uint32_t tMs,uint8_t h,uint8_t m,uint8_t s)
+/* ---------------- public API -------------------------------------------- */
+/* Setup screen: 时/分/秒 drums + Start, small live clock, nothing else. */
+void Scene_TimerPanel(uint32_t tMs,uint32_t msOfDay,uint8_t h,uint8_t m,uint8_t s,uint8_t selected)
 {
-    OLED_Clear(); Timer_DrawArc(tMs); OLED_FillRect(45,17,83,34,OLED_BLACK);
-    Timer_DrawPair(46,h); Timer_DrawPair(75,m); Timer_DrawPair(104,s);
-    OLED_FillRect(72,31,2,2,OLED_WHITE); OLED_FillRect(72,37,2,2,OLED_WHITE); OLED_FillRect(101,31,2,2,OLED_WHITE); OLED_FillRect(101,37,2,2,OLED_WHITE);
+    uint8_t blinkOn=(uint8_t)(((tMs/PN_BLINK_MS)&1u)==0u);
+    Panel_Base(msOfDay);
+    Panel_Drum(PN_BOX_B1,PN_BOX_W,0u,tMs,h,(uint8_t)(selected==0u),blinkOn);
+    Panel_Drum(PN_BOX_B2,PN_BOX_W,1u,tMs,m,(uint8_t)(selected==1u),blinkOn);
+    Panel_Drum(PN_BOX_B3,PN_BOX_W,2u,tMs,s,(uint8_t)(selected==2u),blinkOn);
+    Panel_BoxFrame(3u,(uint8_t)(selected==3u),blinkOn);
+    Panel_CentreText(PN_BOX_B4,PN_BOX_B4W,"Start");
 }
-void Scene_TimerSetup(uint32_t tMs,uint8_t h,uint8_t m,uint8_t s,uint8_t selected)
+/* Running screen: remaining time (large digits, no drum), remaining percentage
+ * in the 4th frame and a 1 px progress bar below the frames. */
+void Scene_TimerRunning(uint32_t msOfDay,uint32_t remainMs,uint32_t pct)
 {
-    Timer_RenderBase(tMs,h,m,s);
-    if(((tMs/400u)&1u)==0u) { if(selected==0u) { OLED_DrawHLine(46,46,23,OLED_WHITE); } else if(selected==1u) { OLED_DrawHLine(75,46,23,OLED_WHITE); } else { OLED_DrawHLine(104,46,22,OLED_WHITE); } }
-}
-void Scene_TimerProgress(uint32_t tMs,uint32_t remainMs,uint32_t pct)
-{
+    char b[5];
     uint8_t hh=(uint8_t)(remainMs/3600000u),mm=(uint8_t)((remainMs/60000u)%60u),ss=(uint8_t)((remainMs/1000u)%60u);
-    int32_t x,w;
-    if(hh>99u) { hh=99u; } if(pct>1000u) { pct=1000u; } Timer_RenderBase(tMs,hh,mm,ss);
-    for(x=46;x<=124;x+=2) { OLED_DrawPixel(x,49,OLED_WHITE); } w=(int32_t)(pct*79u/1000u);
-    if(w>0) { OLED_FillRect(46,46,w,3,OLED_WHITE); }
+    uint32_t left,w;
+    int32_t x;
+    if(hh>99u) { hh=99u; }
+    if(pct>1000u) { pct=1000u; }
+    left=(1000u-pct+5u)/10u;
+    Panel_Base(msOfDay);
+    Panel_BoxFrame(0u,0u,1u); Panel_BoxFrame(1u,0u,1u); Panel_BoxFrame(2u,0u,1u); Panel_BoxFrame(3u,0u,1u);
+    Panel_Row(PN_BOX_B1,PN_BOX_W,PN_CY1,hh,0u);
+    Panel_Row(PN_BOX_B2,PN_BOX_W,PN_CY1,mm,0u);
+    Panel_Row(PN_BOX_B3,PN_BOX_W,PN_CY1,ss,0u);
+    if(left>=100u) { b[0]='1'; b[1]='0'; b[2]='0'; b[3]='%'; b[4]=0; }
+    else if(left>=10u) { b[0]=(char)('0'+left/10u); b[1]=(char)('0'+left%10u); b[2]='%'; b[3]=0; }
+    else { b[0]=(char)('0'+left); b[1]='%'; b[2]=0; }
+    Panel_CentreText(PN_BOX_B4,PN_BOX_B4W,b);
+    for(x=PN_BAR_X0;x<=PN_BAR_X1;x+=4) { OLED_DrawPixel(x,PN_BAR_Y,OLED_WHITE); }
+    w=(uint32_t)(pct*(uint32_t)(PN_BAR_X1-PN_BAR_X0)/1000u);
+    if(w>0u) { OLED_DrawHLine(PN_BAR_X0,PN_BAR_Y,(int32_t)w,OLED_WHITE); }
 }
+
 void Scene_Compose(uint8_t a[8][128],uint8_t b[8][128],uint16_t p)
 {
     int32_t x,y,dx,dy,d2,R,fn,fo,sx,sy,bit,idx,m;
