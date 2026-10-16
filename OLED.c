@@ -3,6 +3,9 @@
 #include "OLED.h"
 uint8_t OLED_GRAM[OLED_H/8][OLED_W];
 static int32_t s_clipCx=0, s_clipCy=0, s_clipR2=-1;
+/* V20: optional rectangular clip (x1 < x0 disables it); the countdown drum uses
+ * it so a digit sliding in or out is cut exactly at the frame border. */
+static int32_t s_clipX0=0, s_clipY0=0, s_clipX1=-1, s_clipY1=0;
 static uint8_t s_transferOK=1u;
 #define SCL_H() (OLED_SCL_PORT->BSRR=OLED_SCL_PIN)
 #define SCL_L() (OLED_SCL_PORT->BRR=OLED_SCL_PIN)
@@ -108,13 +111,18 @@ uint8_t OLED_Init(void)
     OLED_WriteCommand(0xA4u); OLED_WriteCommand(0xA6u); OLED_WriteCommand(0x2Eu);
     OLED_Clear(); OLED_Update(); OLED_WriteCommand(0xAFu); return ack;
 }
-void OLED_Clear(void) { uint16_t i; uint8_t *p=&OLED_GRAM[0][0]; for(i=0u;i<1024u;i++) { p[i]=0u; } }
+void OLED_Clear(void) { uint16_t i; uint8_t *p=&OLED_GRAM[0][0]; for(i=0u;i<1024u;i++) { p[i]=0u; }
+    /* V20: a full clear also drops every pending clip, so a scene can never
+     * inherit a stale clip rectangle from the scene drawn before it. */
+    s_clipR2=-1; s_clipX1=-1; s_clipY1=0; }
 void OLED_Fill(uint8_t color) { uint16_t i; uint8_t *p=&OLED_GRAM[0][0]; for(i=0u;i<1024u;i++) { p[i]=color?255u:0u; } }
 void OLED_SetClipCircle(int32_t cx,int32_t cy,int32_t r) { s_clipCx=cx; s_clipCy=cy; s_clipR2=(r<0)?-1:r*r; }
+void OLED_SetClipRect(int32_t x0,int32_t y0,int32_t x1,int32_t y1) { s_clipX0=x0; s_clipY0=y0; s_clipX1=x1; s_clipY1=y1; }
 void OLED_DrawPixel(int32_t x,int32_t y,uint8_t c)
 {
     int32_t dx,dy;
     if((uint32_t)x>=128u || (uint32_t)y>=64u) { return; }
+    if(s_clipX1>=s_clipX0 && (x<s_clipX0 || x>s_clipX1 || y<s_clipY0 || y>s_clipY1)) { return; }
     if(s_clipR2>=0) { dx=x-s_clipCx; dy=y-s_clipCy; if(dx*dx+dy*dy>s_clipR2) { return; } }
     if(c) { OLED_GRAM[y>>3][x] |= (uint8_t)(1u<<(y&7)); }
     else { OLED_GRAM[y>>3][x] &= (uint8_t)~(1u<<(y&7)); }
