@@ -72,9 +72,15 @@ uint8_t Key_Scan(uint32_t nowMs)
                 }
             }
         }
-        if ((i==1u || i==2u) && s_stable[i]==KEY_PRESSED_LEVEL && level==KEY_PRESSED_LEVEL && !s_armed[i] &&
-            (uint32_t)(nowMs-s_pressAt[i])>=KEY_REPEAT_DELAY_MS && (uint32_t)(nowMs-s_repeatAt[i])>=KEY_REPEAT_RATE_MS) {
-            s_repeatMask |= bit; s_repeatAt[i]=nowMs;
+        /* PA5/PA6 auto-repeat has two stages (V19): after 2 s of holding it
+         * repeats every 100 ms, and after 4 s it speeds up to 40 ms - that is
+         * the "长按2秒进入快速加减" behaviour of the countdown panel. */
+        if ((i==1u || i==2u) && s_stable[i]==KEY_PRESSED_LEVEL && level==KEY_PRESSED_LEVEL && !s_armed[i]) {
+            uint32_t held=(uint32_t)(nowMs-s_pressAt[i]);
+            uint32_t rate=(held>=KEY_REPEAT_FAST_DELAY_MS)?KEY_REPEAT_FAST_RATE_MS:KEY_REPEAT_RATE_MS;
+            if (held>=KEY_REPEAT_DELAY_MS && (uint32_t)(nowMs-s_repeatAt[i])>=rate) {
+                s_repeatMask |= bit; s_repeatAt[i]=nowMs;
+            }
         }
         /* Long press: exactly one event per hold, KEY_LONG_MS after the press
          * was accepted (so a key already held at reset is ignored). */
