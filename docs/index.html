@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff"><title>STM32 多功能手表 · 使用手册</title>
+<meta name="description" content="STM32F103C8T6 + 128×64 OLED 多功能手表：流动表盘、倒计时、秒表、计算器、游戏，每一步都有图。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231d1d1f'/%3E%3Crect x='6' y='9' width='20' height='14' rx='2' fill='%23ceeaff'/%3E%3C/svg%3E">
+<style>
+@font-face{font-family:NSC;font-weight:300;font-display:swap;src:url(assets/fonts/nsc-300.woff2) format("woff2")}
+@font-face{font-family:NSC;font-weight:400;font-display:swap;src:url(assets/fonts/nsc-400.woff2) format("woff2")}
+@font-face{font-family:NSC;font-weight:700;font-display:swap;src:url(assets/fonts/nsc-700.woff2) format("woff2")}
+:root{--ink:#1d1d1f;--sub:#3c3c43;--line:#e5e5ea;--soft:#f5f5f7;--blue:#0071e3;--ease:cubic-bezier(.2,.8,.2,1)}
+*{box-sizing:border-box;margin:0}html{scroll-behavior:smooth;scroll-padding-top:72px;-webkit-text-size-adjust:100%}
+body{background:#fff;color:var(--ink);font:400 17px/1.6 NSC,-apple-system,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}img{max-width:100%;height:auto;display:block}
+#bar{position:fixed;inset:0 auto auto 0;height:2px;width:100%;transform-origin:0 0;transform:scaleX(0);background:var(--ink);z-index:60}
+nav{position:fixed;top:0;left:0;right:0;height:52px;z-index:50;display:flex;align-items:center;gap:28px;padding:0 max(20px,4vw);background:rgba(255,255,255,.72);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid rgba(0,0,0,.06)}
+nav b{font-weight:700;letter-spacing:.02em;white-space:nowrap}nav .l{display:flex;gap:22px;overflow-x:auto;scrollbar-width:none;margin-left:auto;font-size:14px;font-weight:400}nav .l::-webkit-scrollbar{display:none}
+nav .l a{white-space:nowrap;opacity:.55;transition:opacity .3s}nav .l a:hover,nav .l a.on{opacity:1}
+.hero{padding-top:52px;text-align:center}
+.vid{position:relative;width:min(1680px,100%);margin:0 auto;aspect-ratio:16/9;-webkit-mask-image:linear-gradient(#000 80%,transparent 100%);mask-image:linear-gradient(#000 80%,transparent 100%)}
+.vid video{width:100%;height:100%;object-fit:cover;display:block}
+.vid .play{position:absolute;left:50%;top:44%;translate:-50% -50%;width:84px;height:84px;border-radius:50%;border:0;background:rgba(29,29,31,.86);color:#fff;font-size:28px;cursor:pointer;display:none}
+.vid.nop .play{display:block}
+.hero h1{font-weight:700;font-size:clamp(40px,7.4vw,112px);line-height:1.06;letter-spacing:-.035em;margin-top:clamp(-60px,-3vw,-16px);position:relative}
+.hero p{font-weight:300;font-size:clamp(18px,2.4vw,30px);max-width:760px;margin:18px auto 0;padding:0 24px;color:var(--sub)}
+.cta{display:inline-flex;gap:14px;margin-top:34px;flex-wrap:wrap;justify-content:center}
+.btn{display:inline-block;padding:13px 26px;border-radius:99px;font-weight:700;font-size:16px;background:var(--ink);color:#fff;transition:transform .4s var(--ease),box-shadow .4s}
+.btn.g{background:#fff;color:var(--ink);box-shadow:inset 0 0 0 1.5px var(--ink)}.btn:hover{transform:translateY(-2px) scale(1.03);box-shadow:0 10px 30px rgba(0,0,0,.18)}
+section{padding:clamp(72px,11vw,150px) max(22px,5vw)}
+.wrap{max-width:1240px;margin:0 auto}
+.kick{font-size:14px;font-weight:700;letter-spacing:.14em;color:var(--sub)}
+h2{word-break:keep-all;text-wrap:balance;font-weight:700;font-size:clamp(34px,5.6vw,76px);line-height:1.08;letter-spacing:-.03em;margin:.25em 0 .3em}
+.lead{font-weight:300;font-size:clamp(18px,2vw,26px);line-height:1.5;color:var(--sub);max-width:34em}
+/* 概览: 实物 + 活的 OLED */
+#overview{text-align:center}#overview .lead{margin:0 auto}
+.dev{position:relative;width:min(640px,86vw);margin:54px auto 0;filter:drop-shadow(0 40px 50px rgba(0,0,0,.22))}
+.dev img{width:100%;display:block}
+.dev .scr{position:absolute;left:7.36%;top:22.43%;width:68.17%;height:53.32%;background:linear-gradient(135deg,#0a0e14,#03060a 60%);display:grid;align-items:center;overflow:hidden}
+.dev .scr::after{content:"";position:absolute;inset:0;background:linear-gradient(115deg,transparent 35%,rgba(255,255,255,.07) 48%,transparent 62%);pointer-events:none}
+.dev canvas{display:block;width:100%;aspect-ratio:2/1;image-rendering:pixelated;filter:drop-shadow(0 0 5px rgba(150,205,255,.55))}
+.hot{position:absolute;width:11%;aspect-ratio:1.7;translate:-50% -50%;border:0;background:none;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.hot i{position:absolute;inset:0;border-radius:10px;box-shadow:0 0 0 2px rgba(0,113,227,.0);transition:box-shadow .3s,background .3s}
+.hot::after{content:"";position:absolute;inset:-6px;border-radius:14px;border:2px solid rgba(0,113,227,.7);animation:pulse 2.4s infinite;opacity:0}
+.hot b{position:absolute;left:112%;top:50%;translate:0 -50%;font:700 13px/1 NSC,sans-serif;letter-spacing:.04em;background:var(--ink);color:#fff;padding:6px 9px;border-radius:8px;white-space:nowrap;opacity:.9;transition:transform .3s var(--ease)}
+.hot:hover b,.hot.on b{transform:translateX(4px) scale(1.08)}.hot.on i{background:rgba(0,113,227,.28);box-shadow:0 0 0 2px #0071e3}
+@keyframes pulse{0%{transform:scale(.9);opacity:.9}70%,100%{transform:scale(1.25);opacity:0}}
+.keymap{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;margin-top:64px;text-align:left}
+.card{background:var(--soft);border-radius:26px;padding:26px 26px 28px;transition:transform .5s var(--ease),box-shadow .5s}
+.card:hover{transform:translateY(-6px);box-shadow:0 24px 50px rgba(0,0,0,.09)}
+.card h3{font-size:22px;font-weight:700;margin:14px 0 6px;letter-spacing:-.01em}.card p{font-weight:300;color:var(--sub);font-size:16px;line-height:1.55}
+kbd{display:inline-block;font:700 13px/1 NSC,ui-monospace,sans-serif;letter-spacing:.04em;padding:6px 10px;border-radius:9px;background:#fff;border:1.5px solid var(--ink);box-shadow:0 2px 0 var(--ink);margin:0 6px 6px 0;transition:transform .15s,box-shadow .15s}
+kbd:hover{transform:translateY(2px);box-shadow:0 0 0 var(--ink)}
+/* 章节 */
+.ch{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:clamp(30px,5vw,90px);max-width:1360px;margin:0 auto;align-items:start}
+.ch.flip .txt{order:2}
+.fig{position:sticky;top:84px}
+.stage{background:linear-gradient(160deg,#f7f7f9,#eceef3);border-radius:34px;padding:clamp(18px,3vw,36px);box-shadow:inset 0 0 0 1px rgba(0,0,0,.04)}
+.bezel{background:#0a0d12;border-radius:22px;padding:clamp(10px,1.6vw,18px);box-shadow:0 30px 60px -20px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.12);margin-bottom:10px;transform:perspective(1100px) rotateX(var(--rx,0)) rotateY(var(--ry,0));transition:transform .5s var(--ease);will-change:transform}
+.oled{display:block;width:100%;aspect-ratio:2/1;image-rendering:pixelated;background:#03060a;border-radius:6px;filter:drop-shadow(0 0 6px rgba(150,205,255,.5))}
+.cap{font-size:14px;color:var(--sub);text-align:center;margin:2px 0 18px}
+.shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:6px}
+.shot{background:#0a0d12;border-radius:14px;padding:8px 8px 10px;color:#dfe9f5;transition:transform .5s var(--ease)}.shot:hover{transform:translateY(-4px) scale(1.02)}
+.px{width:100%;height:auto;image-rendering:pixelated;border-radius:4px;filter:drop-shadow(0 0 4px rgba(150,205,255,.4))}
+.shot figcaption{font-size:12.5px;margin-top:8px;text-align:center;opacity:.9;line-height:1.35}
+.steps{list-style:none;padding:0;margin-top:40px;counter-reset:s;display:grid;gap:6px}
+.steps li{counter-increment:s;display:grid;grid-template-columns:auto 1fr;gap:18px;padding:20px 0;border-top:1px solid var(--line);position:relative}
+.steps li::before{content:counter(s);position:absolute;right:0;top:12px;font:300 44px/1 NSC,sans-serif;color:#d2d2d7}
+.keys{min-width:98px;padding-top:2px}.steps h4{font-size:19px;font-weight:700;letter-spacing:-.01em}.steps p{font-weight:300;color:var(--sub);font-size:16px;margin-top:4px;padding-right:44px}
+/* 通用 / 硬件 */
+.rule{background:var(--ink);color:#fff;border-radius:40px;padding:clamp(34px,6vw,84px);text-align:center;max-width:1240px;margin:0 auto}
+.rule h2{margin-top:.1em}.rule .lead{color:#d2d2d7;margin:0 auto}.rule kbd{background:#fff;color:var(--ink);border-color:#fff;box-shadow:0 2px 0 #8e8e93}
+.hw{display:grid;grid-template-columns:1.25fr 1fr;gap:20px;max-width:1240px;margin:56px auto 0}
+.hw .big{grid-row:span 2;background:var(--soft);border-radius:34px;display:grid;place-items:center;padding:30px;overflow:hidden}
+.hw .big img{width:100%;transition:transform 1.2s var(--ease);filter:drop-shadow(0 30px 40px rgba(0,0,0,.25))}.hw .big:hover img{transform:scale(1.04) rotate(-1deg)}
+.hw .sm{background:var(--soft);border-radius:34px;display:flex;align-items:center;justify-content:center;gap:10px;padding:26px;min-height:300px}.hw .sm img{height:min(300px,32vw);width:auto;filter:drop-shadow(0 20px 26px rgba(0,0,0,.28))}
+.spec{max-width:1240px;margin:20px auto 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}
+.spec div{border-top:1.5px solid var(--ink);padding-top:16px}.spec b{display:block;font-size:30px;letter-spacing:-.02em;font-weight:700}.spec span{font-weight:300;color:var(--sub);font-size:15.5px}
+footer{padding:70px 24px 90px;text-align:center;color:var(--sub);font-size:14px;font-weight:300}footer a{text-decoration:underline;text-underline-offset:3px}
+/* 动效 */
+.rv{opacity:0;transform:translateY(28px);transition:opacity .9s var(--ease),transform .9s var(--ease);transition-delay:var(--d,0s)}.rv.in{opacity:1;transform:none}
+#fx{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:70}
+@media(max-width:900px){.ch,.hw{grid-template-columns:1fr}.ch.flip .txt{order:0}.fig{position:static}.hw .big{grid-row:auto}nav b{font-size:15px}.hot b{display:none}.steps li::before{display:none}.steps p{padding-right:0}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.rv{opacity:1;transform:none}html{scroll-behavior:auto}}
+</style></head><body>
+<div id="bar"></div><canvas id="fx"></canvas>
+<nav><b>STM32 手表 · 手册</b><div class="l"><a href="#dial">时间</a><a href="#timer">倒计时</a><a href="#stopw">秒表</a><a href="#calc">计算器</a><a href="#game">游戏</a><a href="#date">设置</a><a href="#access">手册</a><a href="#hardware">硬件</a></div></nav>
+<header class="hero">
+ <div class="vid" id="vid"><video id="v" poster="assets/poster.jpg" autoplay muted loop playsinline preload="auto"><source src="assets/promo.mp4" type="video/mp4"><source src="assets/promo.webm" type="video/webm"></video><button class="play" aria-label="播放">▶</button></div>
+ <h1>把世界，<br>装进一块小屏幕。</h1>
+ <p>STM32F103C8T6 · 128×64 OLED · 四个按键。<br>流动表盘、倒计时、秒表、计算器、两款游戏——每一步都有图。</p>
+ <div class="cta"><a class="btn" href="#overview">开始阅读</a><a class="btn g" href="#access">手表上怎么扫码</a></div>
+</header>
+<section id="overview" data-nav="概览"><div class="wrap">
+ <p class="kick rv">概览</p><h2 class="rv">一块板，四个键。</h2>
+ <p class="lead rv">上电，OLED 里就是这块手表真正在跑的画面（来自固件逐帧回放）。点一点右边的按键试试。</p>
+ <div class="dev rv"><img src="assets/front.webp" alt="手表正面" width="1200" height="1007"><div class="scr"><canvas class="oled" id="hero-oled" data-clip="dial" width="128" height="64"></canvas></div><button class="hot" data-k="PA4" style="left:91.45%;top:10.35%" aria-label="PA4"><i></i><b>PA4</b></button><button class="hot" data-k="PA5" style="left:91.45%;top:35.47%" aria-label="PA5"><i></i><b>PA5</b></button><button class="hot" data-k="PA6" style="left:91.45%;top:60.27%" aria-label="PA6"><i></i><b>PA6</b></button><button class="hot" data-k="PA7" style="left:91.45%;top:84.99%" aria-label="PA7"><i></i><b>PA7</b></button></div>
+ <p class="cap" id="hint" style="margin-top:26px">点按键：PA4 黑洞 · PA5 设置 · PA6 计算器与游戏 · PA7 日期与访问</p>
+ <div class="keymap">
+  <div class="card rv" style="--d:.0s"><kbd>PA4</kbd><h3>切换 · 选择</h3><p>时间界面短按切换表盘与黑洞；所有菜单里用来换选中项。长按 2 秒回到时间界面。</p></div>
+  <div class="card rv" style="--d:.08s"><kbd>PA5</kbd><h3>设置 · 进入</h3><p>时间界面进入「铃铛 / 秒表」。菜单里确认进入，数值界面加 1。</p></div>
+  <div class="card rv" style="--d:.16s"><kbd>PA6</kbd><h3>计算器 · 游戏</h3><p>时间界面进入「计算器 / 游戏」。数值界面减 1。</p></div>
+  <div class="card rv" style="--d:.24s"><kbd>PA7</kbd><h3>日期 · 访问</h3><p>时间界面进入「齿轮 / 放大镜」。倒计时里它是开始，编辑器里它是保存。</p></div>
+ </div></div></section>
+<section class="ch" id="dial" data-nav="时间">
+<div class="txt"><p class="kick rv">01 · 时间</p><h2 class="rv">流动表盘 · 黑洞时间</h2><p class="lead rv">上电即进入。表盘像流水一样缓缓滑动，一键切换成黑洞形态。</p><ol class="steps"><li class="rv"><div class="keys"><kbd>PA4</kbd></div><div><h4>短按：切换节目</h4><p>在「流动表盘」与「黑洞时间」之间切换，带 1 秒形态过渡动画。</p></div></li><li class="rv"><div class="keys"><kbd>PA4</kbd></div><div><h4>长按 2 秒：回到这里</h4><p>在任何界面长按 PA4 两秒，都会回到时间界面。</p></div></li></ol></div>
+<div class="fig"><div class="stage rv"><div class="bezel tilt"><canvas class="oled" data-clip="hole" width="128" height="64"></canvas></div><p class="cap">实机回放：表盘 → 黑洞</p><div class="shots"><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/dial_1.png" alt="流动表盘" width="128" height="64"><figcaption>流动表盘</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/hole_1.png" alt="形变过渡中" width="128" height="64"><figcaption>形变过渡中</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/hole_2.png" alt="黑洞时间 · 日期 星期 温度" width="128" height="64"><figcaption>黑洞时间 · 日期 星期 温度</figcaption></figure></div></div></div></section><section class="ch flip" id="timer" data-nav="倒计时">
+<div class="txt"><p class="kick rv">02 · 倒计时</p><h2 class="rv">倒计时 · 烟花与舞猫</h2><p class="lead rv">时、分、秒像密码锁一样滚动。时间到，烟花绽放，小猫起舞，蜂鸣器响起，LED 闪烁。</p><ol class="steps"><li class="rv"><div class="keys"><kbd>PA5</kbd></div><div><h4>进入设置</h4><p>在时间界面短按 PA5，进入设置界面：左铃铛，右秒表。</p></div></li><li class="rv"><div class="keys"><kbd>PA4</kbd><kbd>PA5</kbd></div><div><h4>选「铃铛」并进入</h4><p>短按 PA4 切换选中项（被选中的外框闪烁），选中铃铛后短按 PA5 进入倒计时。</p></div></li><li class="rv"><div class="keys"><kbd>PA4</kbd><kbd>PA5</kbd><kbd>PA6</kbd></div><div><h4>设定时间</h4><p>PA4 在 时 → 分 → 秒 之间选择；PA5 加 1，PA6 减 1；长按 2 秒快速连加连减，数值到头自动进位、环绕。</p></div></li><li class="rv"><div class="keys"><kbd>PA7</kbd></div><div><h4>开始</h4><p>按 PA7 立即开始并回到时间界面，LED 常亮。再次进入铃铛，可看到剩余时间、百分比与进度条。</p></div></li><li class="rv"><div class="keys"><kbd>PA5</kbd></div><div><h4>长按 2 秒：取消</h4><p>倒计时进行中，长按 PA5 两秒取消。</p></div></li></ol></div>
+<div class="fig"><div class="stage rv"><div class="bezel tilt"><canvas class="oled" data-clip="timer" width="128" height="64"></canvas></div><p class="cap">设定时间</p><div class="bezel tilt"><canvas class="oled" data-clip="alarm" width="128" height="64"></canvas></div><p class="cap">时间到：烟花 + 舞猫</p><div class="shots"><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/menu1.png" alt="设置界面：铃铛 / 秒表" width="128" height="64"><figcaption>设置界面：铃铛 / 秒表</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/timer_sel.png" alt="选中的框会闪烁" width="128" height="64"><figcaption>选中的框会闪烁</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/timer_set.png" alt="设为 00:00:03" width="128" height="64"><figcaption>设为 00:00:03</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/alarm_fw.png" alt="烟花绽放" width="128" height="64"><figcaption>烟花绽放</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/alarm_cat.png" alt="舞猫登场" width="128" height="64"><figcaption>舞猫登场</figcaption></figure></div></div></div></section><section class="ch" id="stopw" data-nav="秒表">
+<div class="txt"><p class="kick rv">03 · 秒表</p><h2 class="rv">秒表</h2><p class="lead rv">毫秒精度的大钟盘。可以无限分圈，保留最近 100 圈。</p><ol class="steps"><li class="rv"><div class="keys"><kbd>PA5</kbd><kbd>PA4</kbd><kbd>PA5</kbd></div><div><h4>进入秒表</h4><p>时间界面 PA5 进入设置，PA4 选中右边的秒表图标，PA5 进入。</p></div></li><li class="rv"><div class="keys"><kbd>PA5</kbd></div><div><h4>开始 / 暂停</h4><p>按一下开始，再按暂停；暂停后再按，从头开始并清空分圈记录。</p></div></li><li class="rv"><div class="keys"><kbd>PA6</kbd></div><div><h4>分圈</h4><p>每按一次记一圈，短针回到 12 点重新开始扫，一眼看出这一圈跑了多久。</p></div></li><li class="rv"><div class="keys"><kbd>PA7</kbd></div><div><h4>翻看历史</h4><p>逐圈回看，被翻到的圈号闪烁；3 秒无操作回到最新一圈。</p></div></li><li class="rv"><div class="keys"><kbd>PA4</kbd></div><div><h4>长按 2 秒：退出</h4><p>回到时间界面，秒表继续在后台走。</p></div></li></ol></div>
+<div class="fig"><div class="stage rv"><div class="bezel tilt"><canvas class="oled" data-clip="stopw" width="128" height="64"></canvas></div><p class="cap">开始 → 分圈 → 分圈</p><div class="shots"><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/stopw_1.png" alt="大钟盘 + MM:SS.mmm" width="128" height="64"><figcaption>大钟盘 + MM:SS.mmm</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/stopw_2.png" alt="两圈记录" width="128" height="64"><figcaption>两圈记录</figcaption></figure></div></div></div></section><section class="ch flip" id="calc" data-nav="计算器">
+<div class="txt"><p class="kick rv">04 · 计算器</p><h2 class="rv">计算器</h2><p class="lead rv">四则运算，全程整数内核：0.1 + 0.2 精确等于 0.3。</p><ol class="steps"><li class="rv"><div class="keys"><kbd>PA6</kbd></div><div><h4>进入设置2</h4><p>时间界面短按 PA6：左计算器，右游戏。</p></div></li><li class="rv"><div class="keys"><kbd>PA4</kbd><kbd>PA5</kbd></div><div><h4>选计算器并进入</h4><p>PA4 切换选中，PA5 进入。</p></div></li><li class="rv"><div class="keys"><kbd>PA5</kbd><kbd>PA6</kbd><kbd>PA7</kbd></div><div><h4>按键盘</h4><p>PA5 向左、PA6 向下（到边界自动绕回），PA7 确认；选中的方框闪烁。</p></div></li><li class="rv"><div class="keys"><kbd>PA4</kbd></div><div><h4>移动光标</h4><p>在显示行里前后移动光标，可在中间插入或修改。</p></div></li><li class="rv"><div class="keys"><kbd>PA7</kbd></div><div><h4>AC · 清空</h4><p>左上 AC 无限退回上一步；左下按键清空全部。结果后按任意键开始新计算。</p></div></li></ol></div>
+<div class="fig"><div class="stage rv"><div class="bezel tilt"><canvas class="oled" data-clip="calc" width="128" height="64"></canvas></div><p class="cap">输入 9 → 加 → 1 …</p><div class="shots"><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/menu2.png" alt="设置2：计算器 / 游戏" width="128" height="64"><figcaption>设置2：计算器 / 游戏</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/calc_1.png" alt="键盘" width="128" height="64"><figcaption>键盘</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/calc_2.png" alt="输入与结果" width="128" height="64"><figcaption>输入与结果</figcaption></figure></div></div></div></section><section class="ch" id="game" data-nav="游戏">
+<div class="txt"><p class="kick rv">05 · 游戏</p><h2 class="rv">俄罗斯方块 · 跳一跳</h2><p class="lead rv">方块每落一块就加分，右栏分数实时跳动；跳一跳远近随机，落地有缓冲。结束时烟花为你绽放。</p><ol class="steps"><li class="rv"><div class="keys"><kbd>PA6</kbd><kbd>PA4</kbd><kbd>PA5</kbd></div><div><h4>进入游戏</h4><p>时间界面 PA6 → PA4 选中游戏手柄 → PA5，进入游戏选择：PA4 在「跳一跳」与「俄罗斯方块」间切换，PA5 开始。</p></div></li><li class="rv"><div class="keys"><kbd>PA5</kbd><kbd>PA6</kbd><kbd>PA7</kbd><kbd>PA4</kbd></div><div><h4>俄罗斯方块</h4><p>PA5 左移，PA6 右移，PA7 旋转，PA4 暂停（任意键继续，3-2-1 倒数后恢复）。每落一块 +10 分，消行额外加成。</p></div></li><li class="rv"><div class="keys"><kbd>PA5</kbd></div><div><h4>跳一跳</h4><p>按住 PA5 蓄力，松开起跳；平台间距与大小每次随机。落在平台上得 1 分，落空则掉下去，游戏结束。</p></div></li><li class="rv"><div class="keys"><kbd>PA4</kbd><kbd>PA5</kbd></div><div><h4>结算</h4><p>得分与烟花同屏。PA4 在「房子」「重来」之间切换，PA5 确认。</p></div></li></ol></div>
+<div class="fig"><div class="stage rv"><div class="bezel tilt"><canvas class="oled" data-clip="tetris" width="128" height="64"></canvas></div><p class="cap">俄罗斯方块</p><div class="bezel tilt"><canvas class="oled" data-clip="jump" width="128" height="64"></canvas></div><p class="cap">跳一跳</p><div class="shots"><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/gamemenu.png" alt="游戏选择" width="128" height="64"><figcaption>游戏选择</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/tetris_1.png" alt="开局 3 · 2 · 1" width="128" height="64"><figcaption>开局 3 · 2 · 1</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/tetris_2.png" alt="方块下落" width="128" height="64"><figcaption>方块下落</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/tetris_3.png" alt="得分 00010" width="128" height="64"><figcaption>得分 00010</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/jump_1.png" alt="起跳 · 得分 00" width="128" height="64"><figcaption>起跳 · 得分 00</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/jump_2.png" alt="落上平台 · 得分 02" width="128" height="64"><figcaption>落上平台 · 得分 02</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/jump_3.png" alt="跳了 3 步" width="128" height="64"><figcaption>跳了 3 步</figcaption></figure></div></div></div></section><section class="ch flip" id="date" data-nav="设置">
+<div class="txt"><p class="kick rv">06 · 设置</p><h2 class="rv">年月日 · 时间设置</h2><p class="lead rv">像翻日历一样翻页。星期由年月日自动推算，永远和日期一致。</p><ol class="steps"><li class="rv"><div class="keys"><kbd>PA7</kbd></div><div><h4>进入设置3</h4><p>时间界面短按 PA7：左齿轮，右放大镜。</p></div></li><li class="rv"><div class="keys"><kbd>PA4</kbd><kbd>PA5</kbd></div><div><h4>选齿轮并进入</h4><p>PA4 切换，PA5 进入日期时间编辑器。</p></div></li><li class="rv"><div class="keys"><kbd>PA4</kbd></div><div><h4>换字段</h4><p>年 → 月 → 日 → 时 → 分 → 秒 循环；被选中的框闪烁。</p></div></li><li class="rv"><div class="keys"><kbd>PA5</kbd><kbd>PA6</kbd></div><div><h4>翻页</h4><p>PA5 下一页（新数字从下方升起），PA6 上一页；长按自动连翻。月、日越界自动夹取。</p></div></li><li class="rv"><div class="keys"><kbd>PA7</kbd></div><div><h4>保存</h4><p>回到时间界面，立刻按新时间显示。长按 PA4 两秒则放弃修改。</p></div></li></ol></div>
+<div class="fig"><div class="stage rv"><div class="bezel tilt"><canvas class="oled" data-clip="date" width="128" height="64"></canvas></div><p class="cap">翻日历式设置</p><div class="shots"><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/menu3.png" alt="设置3：齿轮 / 放大镜" width="128" height="64"><figcaption>设置3：齿轮 / 放大镜</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/date_1.png" alt="编辑器" width="128" height="64"><figcaption>编辑器</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/date_2.png" alt="2027-06-16 WED" width="128" height="64"><figcaption>2027-06-16 WED</figcaption></figure></div></div></div></section><section class="ch" id="access" data-nav="手册">
+<div class="txt"><p class="kick rv">07 · 手册</p><h2 class="rv">访问 · 扫一扫</h2><p class="lead rv">手表自己带一本说明书。上电，进入访问，用手机扫一扫即可打开这个网页。</p><ol class="steps"><li class="rv"><div class="keys"><kbd>PA7</kbd><kbd>PA4</kbd><kbd>PA5</kbd></div><div><h4>进入访问</h4><p>时间界面 PA7 → PA4 选中放大镜 → PA5。</p></div></li><li class="rv"><div class="keys"></div><div><h4>先看提示，再扫码</h4><p>屏幕先显示 3 秒「扫一扫查看使用手册」（底部进度条），随后整屏二维码。</p></div></li><li class="rv"><div class="keys"><kbd>PA4</kbd></div><div><h4>长按 2 秒：返回</h4><p>回到时间界面。</p></div></li></ol></div>
+<div class="fig"><div class="stage rv"><div class="bezel tilt"><canvas class="oled" data-clip="access" width="128" height="64"></canvas></div><p class="cap">提示 3 秒，然后二维码</p><div class="shots"><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/access_1.png" alt="提示" width="128" height="64"><figcaption>提示</figcaption></figure><figure class="shot rv"><img class="px" loading="lazy" src="assets/oled/access_2.png" alt="二维码" width="128" height="64"><figcaption>二维码</figcaption></figure></div></div></div></section>
+<section id="rules" data-nav="规则"><div class="rule rv"><p class="kick" style="color:#d2d2d7">通用规则</p><h2>记住这一条就够了。</h2>
+ <p class="lead"><kbd>PA4</kbd> 长按 2 秒，在任何界面都会回到时间界面。<br>返回后 1 秒内 PA4 不响应，避免误触。</p></div></section>
+<section id="hardware" data-nav="硬件"><div class="wrap"><p class="kick rv">硬件</p><h2 class="rv">每一个细节，<br>都在这块板子上。</h2>
+ <div class="hw"><div class="big rv"><img loading="lazy" src="assets/back.webp" alt="手表背面" width="1200" height="949"></div>
+  <div class="sm rv"><img loading="lazy" src="assets/left.webp" alt="左侧面"><img loading="lazy" src="assets/right.webp" alt="右侧面"></div>
+  <div class="sm rv" style="font-weight:300;color:var(--sub);flex-direction:column;align-items:flex-start;text-align:left;font-size:17px;line-height:1.7"><b style="color:var(--ink);font-size:22px;font-weight:700">背面</b>STM32F103C8T6（LQFP48）居中，右侧是蜂鸣器，下方四针排针 H1 引出接口。</div></div>
+ <div class="spec"><div class="rv"><b>72 MHz</b><span>ARM Cortex-M3 · STM32F103C8T6</span></div><div class="rv" style="--d:.08s"><b>128 × 64</b><span>OLED · I²C（PB6 SCL / PB7 SDA）</span></div><div class="rv" style="--d:.16s"><b>4 键</b><span>PA4 · PA5 · PA6 · PA7，短按 / 长按</span></div><div class="rv" style="--d:.24s"><b>&lt; 128 KB</b><span>整个固件，20 个 .c / .h 文件</span></div></div></div></section>
+<footer>固件 V32 · 本页纯静态，无需联网服务 · <a href="https://github.com/bizuming1-ui/STM32F103C8T6">源码（GitHub）</a></footer>
+<script>
+const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)],RM=matchMedia('(prefers-reduced-motion:reduce)').matches;
+/* 滚动进度 + 导航高亮 */
+const bar=$('#bar');addEventListener('scroll',()=>{bar.style.transform='scaleX('+scrollY/Math.max(1,document.body.scrollHeight-innerHeight)+')'},{passive:true});
+const links=$$('nav .l a'),io2=new IntersectionObserver(es=>es.forEach(e=>e.isIntersecting&&links.forEach(a=>a.classList.toggle('on',a.getAttribute('href')=='#'+e.target.id))),{rootMargin:'-45% 0px -50% 0px'});$$('section[id]').forEach(s=>io2.observe(s));
+/* 入场 */
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+$$('.rv').forEach((el,i)=>{if(!el.style.getPropertyValue('--d'))el.style.setProperty('--d',(i%4)*.07+'s');io.observe(el)});
+/* 视频: 看得到才播, 被拦截自动播放时给一个播放键 */
+const v=$('#v'),vb=$('#vid');v.play().catch(()=>vb.classList.add('nop'));$('.play').onclick=()=>{v.play();vb.classList.remove('nop')};
+new IntersectionObserver(es=>es.forEach(e=>e.isIntersecting?v.play().catch(()=>{}):v.pause())).observe(vb);
+/* OLED 播放器: 固件真实帧 (clips.bin, 与固件显存同格式) */
+const ON=[206,234,255],OFF=[3,6,10];let J,B;const P=[];
+function Pl(cv,clip){this.cv=cv;this.x=cv.getContext('2d');this.im=this.x.createImageData(128,64);this.c=clip;this.i=0;this.vis=false;new IntersectionObserver(e=>this.vis=e[0].isIntersecting).observe(cv)}
+Pl.prototype.draw=function(){const c=J.clips[this.c],o=(c.o+this.i)*1024,d=this.im.data;
+ for(let p=0;p<8;p++)for(let x=0;x<128;x++){const g=B[o+p*128+x];for(let b=0;b<8;b++){const k=(((p*8+b)*128)+x)*4,col=(g>>b&1)?ON:OFF;d[k]=col[0];d[k+1]=col[1];d[k+2]=col[2];d[k+3]=255}}
+ this.x.putImageData(this.im,0,0)};
+Pl.prototype.set=function(c){this.c=c;this.i=0;this.draw()};
+Promise.all([fetch('assets/clips.json').then(r=>r.json()),fetch('assets/clips.bin').then(r=>r.arrayBuffer())]).then(([j,b])=>{J=j;B=new Uint8Array(b);
+ $$('canvas.oled').forEach(cv=>{const p=new Pl(cv,cv.dataset.clip);P.push(p);p.draw()});let last=0;
+ (function f(t){requestAnimationFrame(f);if(t-last<1000/J.fps)return;last=t;P.forEach(p=>{if(!p.vis)return;const n=J.clips[p.c].n;p.i=(p.i+1)%n;if(!RM||p.i==0)p.draw()})})(0)}).catch(()=>{});
+/* 概览: 点按键 = 在实物屏幕上回放对应功能 */
+const hp=P,H={PA4:['hole','黑洞：PA4 在表盘与黑洞之间切换'],PA5:['menu1','PA5：进入设置（铃铛 / 秒表）'],PA6:['calc','PA6：进入计算器 / 游戏'],PA7:['date','PA7：进入设置3（日期 / 访问）']};
+$$('.hot').forEach(b=>b.addEventListener('click',()=>{const [c,t]=H[b.dataset.k];$$('.hot').forEach(x=>x.classList.toggle('on',x==b));$('#hint').textContent=t;
+ const p=P.find(p=>p.cv.id=='hero-oled');if(p)p.set(c)}));
+/* 倾斜 */
+$$('.tilt').forEach(el=>{el.addEventListener('pointermove',e=>{if(RM)return;const r=el.getBoundingClientRect(),x=(e.clientX-r.left)/r.width-.5,y=(e.clientY-r.top)/r.height-.5;el.style.setProperty('--ry',x*12+'deg');el.style.setProperty('--rx',-y*12+'deg')});el.addEventListener('pointerleave',()=>{el.style.setProperty('--rx','0deg');el.style.setProperty('--ry','0deg')})});
+/* 触屏 / 鼠标光轨 */
+const fx=$('#fx'),g=fx.getContext('2d'),pts=[];let raf=0;
+function rs(){fx.width=innerWidth*devicePixelRatio;fx.height=innerHeight*devicePixelRatio;g.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0)}rs();addEventListener('resize',rs);
+function spawn(x,y,n){for(let i=0;i<n;i++){const a=Math.random()*6.283,s=Math.random()*1.4;pts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-.3,l:1,r:3+Math.random()*7,h:200+Math.random()*60})}if(!raf)raf=requestAnimationFrame(tick)}
+function tick(){g.clearRect(0,0,innerWidth,innerHeight);g.globalCompositeOperation='source-over';
+ for(let i=pts.length-1;i>=0;i--){const p=pts[i];p.x+=p.vx;p.y+=p.vy;p.l-=.028;if(p.l<=0){pts.splice(i,1);continue}
+  const gr=g.createRadialGradient(p.x,p.y,0,p.x,p.y,p.r*2.4);gr.addColorStop(0,'hsla('+p.h+',90%,62%,'+p.l*.55+')');gr.addColorStop(1,'hsla('+p.h+',90%,62%,0)');g.fillStyle=gr;g.beginPath();g.arc(p.x,p.y,p.r*2.4,0,6.283);g.fill()}
+ raf=pts.length?requestAnimationFrame(tick):0}
+if(!RM){let lx=0,ly=0;const mv=e=>{const d=Math.hypot(e.clientX-lx,e.clientY-ly);if(d>7){spawn(e.clientX,e.clientY,2);lx=e.clientX;ly=e.clientY}};addEventListener('pointermove',mv,{passive:true});addEventListener('pointerdown',e=>spawn(e.clientX,e.clientY,14),{passive:true})}
+</script></body></html>
